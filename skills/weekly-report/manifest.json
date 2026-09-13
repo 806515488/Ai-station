@@ -1,0 +1,11 @@
+{
+  "id": "weekly-report",
+  "ns": "weekly",
+  "name": "写周报",
+  "description": "收集本周素材（笔记目录 + 本仓 git 提交），生成《工作周报》markdown（可选 .docx）并落盘可下载。",
+  "type": "agent",
+  "entry": "weekly_report",
+  "keys": [],
+  "model": "text",
+  "icon": "📝"
+}

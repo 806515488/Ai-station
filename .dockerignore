@@ -1,0 +1,27 @@
+# 别进镜像的东西（.dockerignore ≈ 镜像版的 .gitignore）。
+#
+# ★ 前两条是有"红线"性质的：这两个目录里是真档案数据（干部人事档案属敏感个人信息），
+#   一旦烤进镜像，镜像推到哪儿数据就跟到哪儿 —— 而且镜像层是删不干净的。
+data/
+samples/
+
+# 本地开发/版本控制的东西，镜像里用不到
+.git/
+.gitignore
+.github/
+.agents/
+.claude/
+.idea/
+.pytest_cache/
+tests/
+docs/
+
+# 密钥绝不进镜像（服务器上本来也不放 key，这里再兜一道）
+.env
+src/.env
+*.pem
+*.key
+
+# Python 编译产物
+**/__pycache__/
+**/*.pyc

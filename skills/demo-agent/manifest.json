@@ -1,0 +1,11 @@
+{
+  "id": "demo-agent",
+  "ns": "demo",
+  "name": "Demo 对话",
+  "description": "演示宿主对话→工具→答复闭环的 agent 型技能；含一个需批准的 fake_risky 工具。",
+  "type": "agent",
+  "entry": "station.demo_agent",
+  "keys": [],
+  "model": "text",
+  "icon": "💬"
+}

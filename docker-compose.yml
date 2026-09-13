@@ -1,0 +1,47 @@
+# 服务器上的部署描述：一条 `docker compose up -d --build` 起站。
+#
+# ★ 本文件是**给服务器看的**，本机开发用不到（本机直接 `station-web` 跑 127.0.0.1:8001，
+#   默认值见 src/station/app/server.py 的 _serve_options）。
+#
+# 服务器上的目录约定（部署脚本会建好）：
+#   /srv/station/data     ← 所有运行时状态（SQLite + 上传的照片 + 产物）
+#   /srv/station/certs    ← 自签证书 key.pem / cert.pem
+# 源码放哪都行，只要在这里 `docker compose up`（一般是 /srv/station/src）。
+services:
+  station:
+    build:
+      context: .
+      args:
+        # 大陆的机器从 pypi.org 装 langchain 这一大家子会慢到离谱；服务器在腾讯云内，
+        # 走它的 PyPI 镜像最快。不想要就删掉这两行（Dockerfile 会回落到默认 PyPI）。
+        PIP_INDEX: "https://mirrors.cloud.tencent.com/pypi/simple/"
+    image: station-ai:latest
+    container_name: station
+    restart: unless-stopped
+
+    ports:
+      - "8443:8443"
+
+    environment:
+      # ★ 容器里**必须**绑 0.0.0.0。绑 127.0.0.1 的话只有容器自己连得上，
+      #   外面（包括端口映射）一律连不进来 —— 这是新手最容易卡半天的一条。
+      STATION_HOST: "0.0.0.0"
+      STATION_PORT: "8443"
+      # 两个都给才开 HTTPS；只给一个会以 HTTP 起站并在日志里告警（见 _serve_options）
+      STATION_SSL_KEYFILE: "/certs/key.pem"
+      STATION_SSL_CERTFILE: "/certs/cert.pem"
+
+    volumes:
+      # ★★ 唯一会丢用户数据的地方 ★★
+      # data/ 装着 SQLite、上传的翻拍照片、导出的产物。不挂这个卷，容器一删
+      # （compose down / 重新 build）档案就全没了 —— 而且是静默的：容器照常起来，
+      # 只是里面是空的。这一行是这个文件里最重要的一行。
+      - /srv/station/data:/app/data
+      # 证书只读挂进去（容器没有理由写它）
+      - /srv/station/certs:/certs:ro
+
+    # cgroup 硬上限（宿主机 1.9G，留出系统 + dockerd 的余量）。
+    # 有它：超了死的是这个容器，`docker inspect` 一眼看得出是 OOM，服务重启即可。
+    # 没它：内核在**宿主机**上随机挑一个受害者 —— 可能挑到 sshd，那你就连不上机器了。
+    # 配合 src/station/core/heavy.py 的重活闸（同时只跑一件吃内存的活）一起用。
+    mem_limit: 1400m

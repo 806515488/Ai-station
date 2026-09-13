@@ -1,0 +1,17 @@
+{
+  "id": "demo-pipe",
+  "ns": "pipe",
+  "name": "Demo 流水线",
+  "description": "演示 pipeline 型异步任务：分段 sleep 吐进度，最后产一个 .txt 产物可预览下载。",
+  "type": "pipeline",
+  "entry": "station.demo_pipe",
+  "keys": [],
+  "model": "text",
+  "icon": "🧵",
+  "args": [
+    { "name": "steps", "label": "步数", "type": "int", "min": 1, "max": 50,
+      "default": 5, "description": "跑几步（1–50，越大越久）。" },
+    { "name": "tag", "label": "标签", "type": "text", "default": "demo",
+      "description": "产物文件名里的 tag。" }
+  ]
+}

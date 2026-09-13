@@ -1,0 +1,1673 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>station · 个人 AI 工作站</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#2a2f3a;--fg:#e7e9ee;
+        --dim:#9aa2b1;--acc:#4c8dff;--ok:#3fb96a;--warn:#e0a63c;--err:#e2605a;}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--fg);height:100vh;display:flex}
+  aside{width:232px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px;gap:6px;overflow:auto}
+  aside h1{font-size:15px;margin:2px 4px 8px}
+  aside h2{font-size:11px;color:var(--dim);margin:10px 4px 2px}
+  main{flex:1;display:flex;flex-direction:column;min-width:0}
+  #workspace{flex:1;display:flex;flex-direction:column;min-height:0}
+  .bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .bar b{font-size:15px}
+  .bar .hint{color:var(--dim);font-size:12px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:7px;padding:6px 14px;cursor:pointer;font-size:14px}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--dim)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .m{max-width:78%;padding:8px 12px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
+  /* 工具调用那一行：小胶囊，不是"消息"——它说的是"系统正在做什么"。
+     显示技能声明的人话（⚙ 查看有哪些识图模型），原始名与参数放进 title / 右侧暗字。 */
+  .m.tool{align-self:flex-start;background:none;border:0;padding:0 2px;
+          display:flex;align-items:center;gap:6px;max-width:88%;
+          font-size:12px;color:var(--dim)}
+  .m.tool .ti{flex:none;opacity:.7}
+  .m.tool>span:not(.ti):not(.ta){color:var(--fg);opacity:.9}
+  .m.tool .ta{flex:none;opacity:.6;font-family:ui-monospace,Consolas,monospace;
+              font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%}
+  /* 经 Markdown 渲染的消息：关掉 pre-wrap（换行改由 <p>/<br> 管），并给块级元素排版 */
+  .m.md{white-space:normal}
+  .m.md p{margin:0 0 6px}
+  .m.md p:last-child{margin-bottom:0}
+  .m.md h1,.m.md h2,.m.md h3,.m.md h4,.m.md h5,.m.md h6{margin:8px 0 4px;font-size:14px;line-height:1.4}
+  .m.md ul,.m.md ol{margin:4px 0 6px;padding-left:20px}
+  .m.md li{margin:2px 0}
+  .m.md code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+             padding:0 4px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .m.md pre{background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+            padding:8px 10px;overflow:auto;margin:6px 0}
+  .m.md pre code{background:none;border:0;padding:0;font-size:12px;line-height:1.5}
+  .m.md blockquote{border-left:3px solid var(--line);margin:6px 0;padding:2px 0 2px 8px;color:var(--dim)}
+  .m.md hr{border:0;border-top:1px solid var(--line);margin:8px 0}
+  /* 表格：窄屏横向滚动，别把气泡撑破 */
+  .m.md table{border-collapse:collapse;margin:6px 0;font-size:12px;
+              display:block;overflow-x:auto;max-width:100%}
+  .m.md th,.m.md td{border:1px solid var(--line);padding:3px 7px;text-align:left;white-space:nowrap}
+  .m.md th{background:var(--panel2)}
+  .m.md a{color:var(--acc)}
+  .m.md img{max-width:100%;border-radius:6px}
+  .u{align-self:flex-end;background:var(--acc);color:#fff}
+  .a{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
+  .tool{align-self:center;background:#232a37;color:var(--dim);font-size:12px;border-radius:8px;padding:4px 10px}
+  /* —— 批准卡：危险操作在对话流里的"要不要继续" ——
+     跟其他卡片**同一套语言**（`.card-m` + `.caph`），只用 warn 色区分"这是要你点头的"。
+     卡里显示的是 **`Tool.label`（人话）**，不是 `archive.apply_learning` 这种内部名
+     —— 见 conventions「加工具要写两个'一句话'」。原始名与参数收进 title。 */
+  .card-m.apcard{border-color:var(--warn)}
+  .card-m.apcard .caph{color:var(--warn)}
+  .card-m.apcard .caph b{color:var(--warn)}
+  .apw{display:flex;align-items:center;gap:6px;font-size:13px;min-width:0}
+  .apw .ti{flex:none;opacity:.7;color:var(--dim)}
+  .apw .ta{flex:none;opacity:.6;color:var(--dim);font-family:ui-monospace,Consolas,monospace;
+           font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
+  /* 预览块：由**工具自己**算的"这一步要做什么"（Tool.preview）。
+     内容走 renderMsgText(.., safe=true) 渲染 Markdown，所以这里补的是**块级排版**
+     （`.m.md` 那套是给消息气泡的，作用不到卡片里）。 */
+  .apv{margin-top:7px;padding:7px 9px;border-radius:7px;background:var(--panel);
+       border:1px solid var(--line);font-size:12px;line-height:1.55;
+       max-height:190px;overflow:auto}
+  .apv p{margin:0 0 5px}
+  .apv p:last-child{margin-bottom:0}
+  .apv ul,.apv ol{margin:3px 0 5px;padding-left:18px}
+  .apv li{margin:1px 0}
+  .apv code{background:var(--panel2);padding:1px 4px;border-radius:4px}
+  .err{background:#3a1e1c;border:1px solid var(--err);color:#ffb4ae}
+  /* —— "系统在跑"的等待态 ——
+     从发出去到第一个字之间有真实空窗（判词 + 模型首字，冷启动时好几秒）。
+     这段什么都不显示，用户就会以为死了（他原话）。所以给三样东西：
+       ① 三点跳动 —— 静态文字看不出"在动"，动画能；
+       ② 一句当前阶段 —— 让他知道系统在干什么，而不是黑箱；
+       ③ 超过 8 秒开始报秒数 —— **数字在往上走，是最强的"我还活着"信号**。 */
+  .pending{align-self:flex-start;display:flex;align-items:center;gap:9px;
+           background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+           padding:9px 13px;font-size:13px;color:var(--dim);max-width:78%}
+  .pending .dots{display:flex;gap:4px;flex:none}
+  .pending .dots i{width:6px;height:6px;border-radius:50%;background:var(--acc);
+                   animation:pd 1.2s ease-in-out infinite}
+  .pending .dots i:nth-child(2){animation-delay:.18s}
+  .pending .dots i:nth-child(3){animation-delay:.36s}
+  @keyframes pd{0%,80%,100%{opacity:.25;transform:scale(.75)}
+                40%{opacity:1;transform:scale(1)}}
+  .pending .sec{color:var(--acc);font-variant-numeric:tabular-nums}
+  /* —— 渲染卡片（对话流里的"agent 输出通道"）—— */
+  .card-m{align-self:flex-start;max-width:88%;background:var(--panel2);border:1px solid var(--line);
+          border-radius:10px;padding:10px 12px;font-size:13px}
+  .card-m .caph{display:flex;align-items:center;gap:8px;margin-bottom:6px;color:var(--dim);font-size:12px}
+  .card-m .caph b{color:var(--fg);font-size:13px}
+  .card-m img.page{max-width:230px;max-height:300px;border:1px solid var(--line);border-radius:6px;
+                   cursor:zoom-in;object-fit:contain;background:#000}
+  .kv{display:grid;grid-template-columns:56px 1fr;gap:2px 8px;margin-top:6px}
+  .kv .k{color:var(--dim)}
+  .fcard{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .fcard a{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);
+           border-radius:7px;color:var(--fg);text-decoration:none;min-width:0}
+  .fcard a:hover{border-color:var(--acc);background:var(--panel)}
+  .fcard .fx{flex:none;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;
+             background:#24314a;color:var(--acc);letter-spacing:0}
+  .fcard .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fcard .act{flex:none;color:var(--dim);font-size:11px}
+  .catrow{margin:6px 0}
+  .catrow .ch{color:var(--acc);cursor:pointer;font-size:12px;user-select:none}
+  .catrow .items{margin:4px 0 0 10px}
+  .mrow{padding:5px 8px;border:1px solid var(--line);border-radius:7px;margin:3px 0;cursor:pointer;
+        display:flex;gap:8px;align-items:center}
+  .mrow:hover{border-color:var(--acc)}
+  .mrow .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mrow .pg{color:var(--dim);font-size:11px}
+  .mrow .doubt{color:var(--warn);font-size:11px}
+  .mrowwrap{display:flex;flex-direction:column}
+  .mrow .thumbs{display:flex;gap:3px;flex-wrap:wrap;flex:none;max-width:190px}
+  .mrow .mthumb{width:42px;height:56px;object-fit:cover;border:1px solid var(--line);
+        border-radius:5px;cursor:zoom-in;background:var(--panel)}
+  .mrow .mthumb:hover{border-color:var(--acc)}
+  .zoom{padding:6px 0 2px 10px}
+  .zoom .bigbox{display:flex;align-items:center;justify-content:center;padding:6px;
+        background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:100%;
+        cursor:zoom-out}   /* 灰边可点 = 收起（点图本体不关，所以图上要还原成普通指针） */
+  .zoom .bigpage{cursor:pointer}   /* 点图本体 = 转 90°（点它不会关灯箱，见 zoomOnDoc） */
+  /* 大图高度**跟窗口走**，别写死 420px。
+     实测（1280×900 视口）：写死 420 时图只有 315×420，而可用宽度有 1048px ——
+     翻拍件是看字用的，那么小等于白放大。减掉的 240px 是顶部栏 + 输入框 + 翻页条。 */
+  .zoom .bigpage{display:block;max-width:100%;max-height:calc(100vh - 240px);
+                 transition:transform .18s}
+  /* 包一层给"旋转后重排"用：transform 不改变布局盒子，转 90° 后元素盒子还是原尺寸
+     （竖版图 = 窄而高），容器就按那个高度占位 → 图下方空出一大片、把翻页条推下去。
+     所以旋转时由 spinApply 把这一层的宽高**做成旋转后的形状**，图在里面绝对定位居中。 */
+  .zoom .rotwrap{position:relative;display:block;line-height:0}
+  /* 放大时把卡片撑到可用宽度。
+     .card-m 是 align-self:flex-start（缩到内容大小），不撑开的话整块只有
+     三百多像素宽，图再高也放不大 —— 上一行的 max-height 就白给了。 */
+  .card-m.zooming{width:88%}
+  .zoom .zdeg{color:var(--warn);font-size:11px}
+  .zbar{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim);margin-top:5px}
+  /* 口径学习卡：一条"学到的口径"占一格，等用户点确认 */
+  .lrow{border:1px solid var(--line);border-radius:7px;padding:8px;margin-bottom:6px;background:var(--panel)}
+  .lrow .lwhy{color:var(--dim);font-size:12px;margin-bottom:4px}
+  /* 条文行：走 mdInline(escHtml(...)) —— **类号** 渲染成加粗、原生 HTML 仍被转义
+     （里面嵌着档案 OCR 出来的材料名）。跟批准卡预览同一套处理，两处看起来才一致。 */
+  .lrow .lentry{font-size:13px;background:var(--panel2);padding:5px 8px;border-radius:5px}
+  .cmp2{display:flex;gap:10px}
+  .cmp2>div{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:8px}
+  .cmp2 .lab{color:var(--dim);font-size:11px;margin-bottom:4px}
+  .upc{border:1.5px dashed var(--line);border-radius:9px;padding:14px;text-align:center;cursor:pointer;
+       background:var(--panel)}
+  .upc:hover{border-color:var(--acc)}
+  .upc.sel{border-color:var(--ok)}
+  /* 上传卡片上的"干部姓名"输入框（留空就用文件夹名） */
+  .upname{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+  .upname label{flex:none;font-size:12px;color:var(--dim)}
+  .upname input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+                border-radius:8px;padding:6px 10px;font-size:13px}
+  /* —— 识别进度条（think 流阶段）—— */
+  .prog{align-self:flex-start;max-width:92%;width:min(520px,92%);
+        font-size:13px;color:var(--dim);padding:2px 0}
+  .prog progress{flex:1;min-width:0;height:10px;border:0;border-radius:5px}
+  /* 进度那一行是 [文字][进度条][百分比] 的 flex —— 文字和百分比不许被挤（原来宽度
+     全给了 progress，导致"识别中"被折成两行）。 */
+  .prog .row>span{flex:none;white-space:nowrap}
+  /* 放大时把面板撑开（和 .card-m.zooming 一个道理：不撑开、大图还是被面板宽度卡着） */
+  .prog.zooming{width:92%;max-width:92%}
+  /* 进度面板里的"当前这一张"：缩略图 + 读到的字段（就地刷新，不往对话流里堆消息）。
+     缩略图用 ev.img（服务端 ?thumb=1 的压缩图 + 磁盘缓存）—— 直接放原图会把界面拖死；
+     想看清楚了就点它 → 走 zoomImage 那套灯箱（大图用**原图**，见该函数注释）。 */
+  .prog .jpage{display:flex;gap:10px;align-items:flex-start;margin:0 0 8px}
+  .prog .jpage img{width:128px;max-height:180px;object-fit:contain;flex:none;cursor:zoom-in;
+                   border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+  .prog .jmeta{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.55}
+  .prog .jcnt{color:var(--fg);font-size:14px;margin-bottom:4px}
+  .prog .jmeta .kv{grid-template-columns:46px 1fr;margin-top:2px}
+  .prog progress::-webkit-progress-bar{background:var(--panel);border-radius:4px}
+  .prog progress::-webkit-progress-value{background:var(--acc);border-radius:4px}
+  #composer{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
+  #composer input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 12px}
+  .row{display:flex;align-items:center;gap:8px;margin:8px 0}
+  .hint{color:var(--dim);font-size:12px}
+  a{color:var(--acc);text-decoration:none}
+  /* —— 我的产物抽屉（文件是产物，按“一次产出”分组，不全局平铺）—— */
+  #prodScrim{position:fixed;inset:0;background:rgba(0,0,0,.36);z-index:60}
+  #prodPanel{position:fixed;top:0;right:0;bottom:0;width:min(390px,94vw);
+             background:var(--panel);border-left:1px solid var(--line);z-index:61;
+             display:flex;flex-direction:column;box-shadow:-10px 0 24px rgba(0,0,0,.25)}
+  #prodPanel .head{display:flex;align-items:center;gap:8px;padding:10px 14px;
+                   border-bottom:1px solid var(--line);background:var(--panel2)}
+  #prodPanel .head b{flex:1;font-size:14px}
+  #prodPanel .list{flex:1;overflow:auto;padding:10px 12px}
+  #prodPanel .empty{color:var(--dim);font-size:12px;text-align:center;padding:30px 0}
+  .pg{margin:0 0 10px}
+  .pg-h{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;
+        cursor:pointer;background:var(--panel2);border:1px solid var(--line);min-width:0}
+  .pg-h:hover{border-color:var(--acc)}
+  .pg-h .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+           font-size:13px;font-weight:600}
+  .pg-h .meta{flex:none;color:var(--dim);font-size:11px}
+  .pg-b{display:flex;flex-direction:column;gap:3px;margin:6px 2px 0}
+  .prow{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
+        border-radius:7px;background:var(--panel);color:var(--fg);text-decoration:none;min-width:0}
+  .prow:hover{border-color:var(--acc)}
+  .prow .fx{flex:none;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;
+            background:#24314a;color:var(--acc);letter-spacing:0;text-transform:uppercase}
+  .prow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prow .go{flex:none;color:var(--dim);font-size:11px}
+  .mini{font-size:12px;padding:3px 10px}
+  /* —— 模型配置弹窗（居中模态）——
+     z-index 必须高于产物抽屉的 61 和登录遮罩的 50，否则被它们盖住。
+     类名统一 cfg 前缀：这里既有 .prow（产物抽屉的行）又有 .card-m 等通用名，
+     起通用名会静默覆盖别处的样式（conventions 坑区记过这条）。
+
+     布局是「头 / 滚动体 / 钉底保存条」三段：底栏不跟着滚，所以
+     「提示语 + 保存按钮」永远同屏 —— 这是修「点了保存没反应」那个坑的正面做法
+     （光靠 cfgSay 里 scrollIntoView 兜底太脆）。 */
+  #cfgScrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:70}
+  #cfgPanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+            width:min(880px,95vw);max-height:86vh;z-index:71;
+            display:flex;flex-direction:column;overflow:hidden;
+            background:var(--panel);border:1px solid var(--line);border-radius:14px;
+            box-shadow:0 24px 64px rgba(0,0,0,.5)}
+  #cfgPanel .head{flex:none;display:flex;align-items:flex-start;gap:10px;
+            padding:13px 16px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .cfg-title{flex:1;min-width:0}
+  .cfg-title b{display:block;font-size:15px;font-weight:600;line-height:1.4}
+  .cfg-title span{display:block;font-size:12px;color:var(--dim)}
+  #cfgBody{flex:1;overflow:auto;padding:0 18px 14px}
+  #cfgBody::-webkit-scrollbar{width:11px}
+  #cfgBody::-webkit-scrollbar-thumb{background:#2c313c;border-radius:6px;
+            border:3px solid var(--panel)}
+  #cfgBody::-webkit-scrollbar-thumb:hover{background:#3b4250}
+  #cfgBody::-webkit-scrollbar-track{background:transparent}
+  /* 底部钉住的保存条 */
+  #cfgFoot{flex:none;border-top:1px solid var(--line);background:var(--panel2);
+           padding:9px 18px 11px}
+  .cfgFootRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  #cfgFootHint{line-height:1.6;margin-bottom:7px;font-size:12px;min-height:0}
+  #cfgFootHint:empty{display:none}
+  .cfgWarn{color:var(--warn);font-size:12px}
+  /* 分节标题：序号徽章 + 主标题 + 一行说明 */
+  .cfgsec{display:flex;gap:9px;align-items:flex-start;margin:22px 0 2px}
+  .cfgsec-n{flex:none;width:19px;height:19px;border-radius:50%;background:var(--acc);
+            color:#fff;font-size:11px;font-weight:700;display:flex;
+            align-items:center;justify-content:center;margin-top:1px}
+  .cfgsec-t{min-width:0}
+  .cfgsec-t b{display:block;font-size:13px;font-weight:600}
+  .cfgsec-t .hint{display:block;line-height:1.5;margin-top:1px}
+  /* —— 槽位行：左边"这个功能是干嘛的"，右边"用哪几家、按什么顺序" —— */
+  .cfgslot{display:flex;gap:14px;align-items:flex-start;padding:10px 0;
+           border-top:1px solid var(--line)}
+  .cfgslot:first-child{border-top:0;padding-top:6px}
+  .cfgslot-l{width:196px;flex:none}
+  .cfgslot-l b{display:block;font-size:13px;font-weight:600}
+  .cfgslot-l .hint{display:block;font-size:11px;line-height:1.5;margin-top:2px}
+  /* 药丸和两个下拉**同一行**：下拉做成无边框的次级控件，跟着药丸流式排。
+     分成两行时每行多占 ~30px，四行就是一百多像素的空白。 */
+  .cfgslot-r{flex:1;min-width:0;display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+             min-height:28px}
+  /* 优先级药丸：第一位是主通道（高亮），后面的都是兜底 */
+  .cfgchip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);
+           border:1px solid var(--line);border-radius:8px;padding:2px 4px 2px 8px;
+           font-size:12px;max-width:100%}
+  .cfgchip.pri{border-color:#35507e;background:#1b2331}
+  .cfgchip .ord{flex:none;width:15px;height:15px;border-radius:4px;background:#2b3546;
+                color:var(--dim);font-size:10px;font-weight:700;font-style:normal;
+                display:flex;align-items:center;justify-content:center}
+  .cfgchip.pri .ord{background:var(--acc);color:#fff}
+  .cfgchip .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cfgchip .cm{color:var(--dim);font-size:11px;font-style:normal;white-space:nowrap;
+               font-family:ui-monospace,Consolas,monospace}
+  .cfgchip .cb{flex:none;display:flex}
+  .cfgchip .cb button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px;
+                      line-height:1;padding:3px 4px;border-radius:4px}
+  .cfgchip .cb button:hover{background:#2c3546;color:var(--fg)}
+  .cfgslot-acts{display:flex;gap:2px;align-items:center;flex-wrap:wrap}
+  /* 下拉一律做成"次级控件"：无边框底、悬停才亮，避免每行两个大灰框抢视线 */
+  #cfgPanel select{background:transparent;border:1px solid transparent;color:var(--dim);
+            border-radius:7px;padding:3px 6px;font:inherit;font-size:11px;cursor:pointer;
+            max-width:160px}
+  #cfgPanel select:hover{border-color:var(--line);color:var(--fg)}
+  #cfgPanel select:focus{outline:none;border-color:var(--acc);color:var(--fg)}
+  /* ★ 下拉的**弹出列表**不在 select 这个盒子里：Chrome/Windows 给它的是系统白底，
+     而 option 会继承我们这套浅色字 → 白字白底 = 选项整个看不见（踩过）。
+     必须单独给 option 指定底色和字色，别只调 select。 */
+  #cfgPanel select option{background:var(--panel2);color:var(--fg)}
+  /* 底栏那两个是"主控件"（加一家 / 恢复默认），得有可见的框，别跟着做成隐形 */
+  #cfgFoot select{border-color:var(--line);color:var(--fg)}
+  /* 离线模式提示（STATION_FAKE=1 才出现）：单独成条，别和正文说明混在一起 */
+  #cfgHint:not(:empty){margin:12px 0 0;padding:8px 11px;border-radius:8px;
+        background:rgba(224,166,60,.09);border:1px solid rgba(224,166,60,.3)}
+  /* —— 模型来源卡片 —— */
+  .cfgp{border:1px solid var(--line);border-radius:10px;margin:10px 0;
+        background:var(--panel2);overflow:hidden}
+  .cfgp-h{display:flex;align-items:center;gap:8px;padding:8px 12px;
+          border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .cfgp-h b{font-size:13px}
+  .cfgp-body{padding:10px 12px 12px}
+  .cfgp-note{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:9px}
+  .dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dim)}
+  .dot.ok{background:var(--ok);box-shadow:0 0 0 3px rgba(63,185,106,.16)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 0 3px rgba(224,166,60,.16)}
+  .tag{flex:none;font-size:10px;color:var(--dim);border:1px solid var(--line);
+       border-radius:4px;padding:0 5px;line-height:16px}
+  /* 左标签 / 中输入框 / 右说明：三列定宽。
+     ★ 说明必须自己占一列，不能塞进输入框那一行的 flex 里 —— 否则有说明的行
+     输入框被挤窄、没说明的行铺满，同一张卡里几行输入框**右边缘对不齐**，很脏。
+     留一列空着（<em> 为空）就能让所有输入框等宽。 */
+  .cfgp-grid{display:grid;grid-template-columns:100px minmax(0,1fr) 152px;gap:7px 10px;
+             align-items:center}
+  .cfgp-grid label{font-size:12px;color:var(--dim)}
+  .cfgp-grid .fh{font-size:11px;color:var(--dim);font-style:normal;
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cfgp input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);
+              border-radius:7px;padding:6px 9px;font:inherit;font-size:12px}
+  .cfgp input:focus{outline:none;border-color:var(--acc)}
+  .cfgp-key{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:2px;
+            padding-top:9px;border-top:1px dashed var(--line)}
+  .cfgp-key label{width:100px;flex:none;font-size:12px;color:var(--dim)}
+  .cfgp-key input{flex:1;min-width:0}
+  .cfgp-key button{flex:none}
+  .cfgt{font-size:12px;margin-top:8px;line-height:1.5}
+  .cfgt:empty{display:none}
+  .cfgt .res{display:inline-block;border-radius:6px;padding:2px 8px;font-size:11px}
+  .cfgt .res.ok{background:rgba(63,185,106,.14);color:var(--ok)}
+  .cfgt .res.bad{background:rgba(224,166,60,.14);color:var(--warn)}
+  /* —— 登录视图 / 用户徽标 / 历史下拉 —— */
+  /* position:fixed 全屏遮罩：登录前盖住整个站（之前只给 flex:1，body 是横向 flex，
+     登录框会挤成左边一"列"，和侧栏/大厅并排——截图里的 bug） */
+  #auth{position:fixed;inset:0;background:var(--bg);z-index:50;
+        display:none;align-items:center;justify-content:center}
+  .authBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:26px 30px;width:320px}
+  .authBox h1{font-size:18px;margin:0 0 4px}
+  .authBox .hint{margin-bottom:14px}
+  .authBox input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+        border-radius:8px;padding:10px 12px;margin:6px 0;font:inherit}
+  .authBox button{width:100%;padding:10px;margin-top:10px}
+  .authBox .sw{color:var(--acc);cursor:pointer;font-size:13px}
+  #who{display:flex;align-items:center;gap:8px;margin-top:auto;padding:8px 4px 2px;border-top:1px solid var(--line)}
+  #who b{font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .side-h{display:flex;align-items:center;gap:8px}
+  .side-h h1{font-size:15px;margin:0}
+  #btnNewSide{width:100%;margin:2px 0 4px}
+  #histList{padding:2px;display:flex;flex-direction:column;gap:2px}
+  .hcap{font-size:11px;color:var(--dim);margin:8px 4px 2px}
+  .hitem{font-size:12px;padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;gap:6px;align-items:center}
+  .hitem:hover{background:var(--panel2)}
+  .hitem.sel{background:var(--panel2);border:1px solid var(--acc)}
+  .hitem .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hitem .d{flex:none;color:var(--dim);font-size:10px}
+</style>
+</head>
+<body>
+<!-- 登录视图：未登录时盖在最上面（会话/任务/档案都是"每个人的"，必须先有身份） -->
+<div id="auth" style="display:none">
+  <div class="authBox">
+    <h1>⚡ station</h1>
+    <div class="hint" id="authHint">个人 AI 工作站 · 请登录以继续</div>
+    <input id="aName" placeholder="用户名" autocomplete="username">
+    <input id="aPw" type="password" placeholder="密码" autocomplete="current-password">
+    <button id="aGo">登录</button>
+    <div class="hint" style="text-align:center;margin-top:12px">
+      <span id="aSw">没有账号？<span class="sw">注册一个</span></span>
+    </div>
+  </div>
+</div>
+<aside><div class="side-h"><h1>⚡ station</h1></div>
+  <button class="ghost" id="btnNewSide">＋ 新对话</button>
+  <h2>历史</h2><div id="histList"></div>
+  <div id="who" style="display:none"><b id="whoName"></b>
+    <button class="ghost mini" id="btnLogout">退出</button></div>
+</aside>
+<main>
+  <div id="workspace">
+    <div class="bar"><b>对话</b>
+      <span style="flex:1"></span>
+      <button class="ghost mini" title="模型配置（这个站用哪家的 AI）" onclick="toggleConfig(true)">⚙</button>
+      <button class="ghost mini" title="我的产物" onclick="toggleProducts(true)">🗂</button>
+      <button class="ghost" id="btnNew">新对话</button>
+      <span style="width:1px;height:20px;background:var(--line)"></span>
+      <span class="hint" id="whoBar"></span>
+      <button class="ghost" id="btnLogout2">退出登录</button>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <div id="msgs"></div>
+      <div id="composer"><input id="inp" placeholder="直接说要做什么…">
+        <button id="btnSend">发送</button></div>
+    </div>
+  </div>
+</main>
+<div id="prodScrim" style="display:none" onclick="toggleProducts(false)"></div>
+<div id="prodPanel" style="display:none">
+  <div class="head"><b>🗂 我的产物</b>
+    <button class="ghost mini" onclick="toggleProducts(false)" title="收起">✕</button></div>
+  <div id="prodList" class="list"></div>
+</div>
+
+<div id="cfgScrim" style="display:none" onclick="toggleConfig(false)"></div>
+<div id="cfgPanel" style="display:none">
+  <div class="head">
+    <div class="cfg-title"><b>模型配置</b>
+      <span>选择本站使用的 AI 模型，可按功能分别指定</span></div>
+    <button class="ghost mini" onclick="toggleConfig(false)" title="收起">✕</button>
+  </div>
+
+  <div id="cfgBody">
+    <div class="hint" id="cfgHint"></div>
+
+    <div class="cfgsec"><span class="cfgsec-n">1</span><div class="cfgsec-t">
+      <b>每个功能用哪个模型</b>
+      <span class="hint">依次尝试，第一个不可用时自动切换到下一个。</span></div></div>
+    <div id="cfgSlots"></div>
+
+    <div class="cfgsec"><span class="cfgsec-n">2</span><div class="cfgsec-t">
+      <b>模型来源</b>
+      <span class="hint">① 中所选模型均来自此处，每个来源包含接口地址与密钥。</span></div></div>
+    <div id="cfgProvs"></div>
+
+  </div>
+
+  <!-- 钉底保存条：提示语在按钮正上方，永远同屏（conventions 坑区那条的正面解法） -->
+  <div id="cfgFoot">
+    <div class="hint" id="cfgFootHint"></div>
+    <div class="cfgFootRow">
+      <select id="cfgAddSel" title="添加一个模型来源"><option value="">＋ 添加模型来源</option></select>
+      <button class="ghost mini" id="cfgReset">恢复默认配置</button>
+      <span style="flex:1"></span>
+      <button id="cfgSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+let threadId=null, me=null;
+let _jobWatchers={}, _prodGroups=[];   // job进度观察 / 产物组缓存
+
+// ══ 登录/启动（刷新不再失忆：cookie 有 uid → /api/auth/me → 恢复上次位置）══
+let authMode="login";                        // login | register（登录框两种形态）
+function showAuth(v,hint){ $("#auth").style.display=v?"flex":"none";
+  if(hint) $("#authHint").textContent=hint; }
+$("#aSw").onclick=()=>{ authMode=authMode==="login"?"register":"login";
+  $("#aGo").textContent=authMode==="login"?"登录":"注册";
+  $("#aSw").innerHTML=authMode==="login"?'没有账号？<span class="sw">注册一个</span>':"已有账号？<span class='sw'>去登录</span>"; };
+async function authGo(){
+  const name=$("#aName").value.trim(), pw=$("#aPw").value;
+  if(!name||!pw){ $("#authHint").textContent="用户名和密码都要填。"; return; }
+  const r=await fetch("/api/auth/"+authMode,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({name,password:pw})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){ $("#authHint").textContent=d.detail||"失败，请重试"; return; }
+  me=d.user;
+  if(authMode==="register"&&d.first) $("#authHint").textContent="";   // 首个用户=站长
+  boot(true);
+}
+$("#aGo").onclick=authGo;
+$("#aPw").addEventListener("keydown",e=>{ if(e.key==="Enter") authGo(); });
+$("#btnLogout").onclick=async()=>{ await fetch("/api/auth/logout",{method:"POST"});
+  location.reload(); };
+$("#btnLogout2").onclick=()=>$("#btnLogout").click();   // 顶栏退出 = 侧栏退出（同一个动作）
+async function boot(afterAuth){
+  // 启动主流程：统一主对话 + 左侧历史 → 恢复上次位置（localStorage 记的）
+  showAuth(false);
+  $("#who").style.display="flex"; $("#whoName").textContent=me?me.name:"";
+  $("#whoBar").textContent=me?("👤 "+me.name):"";   // 顶栏也显示当前用户
+  $("#workspace").style.display="flex";
+  await refreshHistory();
+  const last=afterAuth?null:JSON.parse(localStorage.getItem("stLast")||"null");
+  if(last&&last.thread){
+    const sd=await (await fetch(`/api/sessions/${last.thread}`)).json();
+    if(sd&&sd.msgs!==undefined){ openThread(last.thread, sd); }
+    else{ newChat(); }
+  } else {
+    newChat();
+  }
+  refreshProducts();
+}
+// 启动第一步：我是谁？（401 → 登录视图）
+(async()=>{ try{
+    const r=await fetch("/api/auth/me");
+    if(r.ok){ me=(await r.json()).user; boot(false); }
+    else showAuth(true,"个人 AI 工作站 · 请登录以继续");
+  }catch(e){ showAuth(true,"连不上服务器（"+e+"）"); } })();
+
+// ── SSE：把 fetch 响应流按 \n\n 分块解析成 JSON 事件 ──
+async function readSSE(resp,on){
+  const rd=resp.body.getReader(); const dec=new TextDecoder(); let buf="";
+  while(true){
+    const {done,value}=await rd.read(); if(done) break;
+    buf+=dec.decode(value,{stream:true});
+    const parts=buf.split("\n\n"); buf=parts.pop()||"";
+    for(const block of parts){
+      const lines=block.split("\n").filter(l=>l.startsWith("data:"));
+      const data=lines.map(l=>l.slice(5).trim()).join("\n");
+      if(data) { try{ on(JSON.parse(data)); }catch(e){ console.warn("bad sse",data,e); } }
+    }
+  }
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+// ── 左侧：统一对话历史（没有模块卡，只有会话）──
+function histPreview(h){
+  const s=(h.last||"").trim();
+  if(s.startsWith("照片已上传：")) return "上传了档案照片";
+  return s.slice(0,34)||"（空对话）";
+}
+function markHistory(){
+  document.querySelectorAll("#histList .hitem").forEach(el=>
+    el.classList.toggle("sel", el.dataset.id===threadId));
+}
+function newChat(){
+  threadId=null;
+  clearPending();                 // 上一条还挂着等待态的话，别让它跟着漂到新会话里
+  $("#msgs").innerHTML="";
+  localStorage.removeItem("stLast");
+  markHistory();
+  $("#inp").focus();
+}
+async function refreshHistory(){
+  if(!me) return;
+  try{
+    const r=await fetch("/api/sessions");
+    // ★ 拿不到就**别动列表**。以前这里写的是 `r.ok ? … : {sessions:[]}`，于是任何一次
+    //   失败（500/401/网络抖动）都会渲染成"还没有对话"，**把已有的历史整个擦掉** ——
+    //   用户看到的就是"聊完天左边历史没了"。历史列表宁可旧，也不能凭空消失。
+    if(!r.ok) return;
+    const d=await r.json();
+    const rows=(d.sessions||[]).map(h=>`<div class="hitem" data-id="${h.id}">
+      <span class="t">${esc(histPreview(h))}</span>
+      <span class="d">${esc(fmtWhen(h.updated))}</span></div>`).join("");
+    $("#histList").innerHTML=rows||'<div class="hcap">还没有对话</div>';
+    markHistory();
+  }catch(e){ /* 网络抖动同样静默：保留上一次的列表，用户仍可新开对话 */ }
+}
+async function openThread(id, sd){
+  const data=sd||await (await fetch(`/api/sessions/${id}`)).json();
+  if(!data||data.msgs===undefined) return;
+  clearPending();                 // 切会话时同理：等待态是"这一次发送"的，不该跨会话
+  threadId=id; $("#msgs").innerHTML="";
+  (data.msgs||[]).forEach(m=>{
+    if(m.role==="render"&&m.card){ renderCard(m.card); return; }
+    if(m.tool_call){ addMsg("tool",toolChip(m.tool_call)); return; }   // 工具调用行
+    const cls=m.role==="user"?"u":(m.role==="tool"?"tool":"a");
+    // 助手说的话走 Markdown 渲染（和流式那条路同一个口子）；用户/工具行保持原样转义
+    // —— 用户自己的输入没必要渲染，少一个注入面。
+    const el=addMsg(cls,"");
+    if(cls==="a" && m.content) renderMsgText(el,m.content);
+    else el.innerHTML=esc(m.content||"");
+  });
+  // 会话里若还挂着一个待批准的**危险操作**，把它重画出来 —— 否则用户看到的是
+  // "agent 在等允许、屏幕上什么都没有"，只能盲敲"允许"。
+  if(data.pending&&data.pending.tool){
+    showAppr(data.pending.tool,data.pending.label,data.pending.arguments,
+             data.pending.preview);
+  }
+  localStorage.setItem("stLast",JSON.stringify({thread:id}));
+  markHistory();
+  watchThreadJob(data);       // 会话若还有识别任务在跑，接上进度
+  $("#inp").focus();
+}
+$("#histList").onclick=e=>{
+  const it=e.target.closest(".hitem");
+  if(it) openThread(it.dataset.id);
+};
+
+// ── agent 面板（对话是唯一入口）──
+function addMsg(cls,html){ const d=document.createElement("div"); d.className="m "+cls; d.innerHTML=html; $("#msgs").appendChild(d); return d; }
+
+// 工具调用那一行：显示**技能声明的人话**（`Tool.label`），而不是 archive.xxx 这种名字
+// —— 用户看 `archive.list_vision_models` 完全不知道在干嘛。
+// 原始工具名 + 参数塞进 title（鼠标停上去才显示），参数另在右侧用暗色小字列出来。
+// ★ 实时（EV_TOOL 事件）与历史回放（/api/sessions 的 tool_call 字段）发的是**同一个
+//   形状**，都走这个函数 —— 别在别处再拼一份中文字符串（以前两边各写各的，改一处忘一处）。
+function toolChip(ev){
+  const names=(ev&&ev.names)||[], labels=(ev&&ev.labels)||[], args=(ev&&ev.args)||[];
+  if(!names.length) return "调用工具";
+  return names.map((n,i)=>{
+    const leaf=String(n||"").split(".").pop();
+    const label=String(labels[i]||"").trim()||leaf;      // 技能没写 label → 退回叶子名
+    const a=args[i]||{}, keys=Object.keys(a);
+    const detail=String(n||"")+(keys.length?"  "+JSON.stringify(a):"");
+    const brief=keys.slice(0,3).map(k=>`${k}=${a[k]}`).join(" ").slice(0,42);
+    return `<span class="ti">⚙</span><span title="${esc(detail)}">${esc(label)}</span>`
+      + (brief?`<span class="ta">${esc(brief)}</span>`:"");
+  }).join(`<span class="ti">·</span>`);
+}
+
+// ══ 消息里的 Markdown / HTML 渲染 ═══════════════════════════════════
+// 这页面是**纯离线单文件**（没有任何外链脚本），所以渲染器自己写，不引 marked.js：
+// 覆盖模型实际会用到的那些 —— 标题/粗斜体/行内码/代码块/列表/引用/表格/分割线/链接。
+//
+// RENDER_RAW_HTML：模型回复里的**原生 HTML 要不要当 HTML 渲染**（而不是当文字显示）。
+//   true  = 完整渲染（含 onerror/onclick 这类事件属性）—— 用户 09-12 明确选择。
+//   false = 一律转义成文字，只渲染 Markdown（最安全）。
+// ★ 选择 true 就得知道风险：模型这一路的输入包含**你上传的档案扫描件的 OCR 文字**，
+//   一份被人做过手脚的档案，就可能把 <img onerror=…> 之类带进回复、在你浏览器里执行
+//   （能读这个站的 cookie、能代替你操作）。哪天想收回，把这一行改成 false 即可 ——
+//   所有渲染都走 mdToHtml 一个口子，没有第二处。
+const RENDER_RAW_HTML = true;
+
+const escHtml = s => String(s).replace(/[&<>"]/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+// 文本片段：raw 模式下原样（HTML 会被渲染），否则转义
+const mdText = s => RENDER_RAW_HTML ? s : escHtml(s);
+
+// 行内：`code` 最先抠出来（里面的东西**永远转义**，代码要原样显示），
+// 再处理粗体/斜体/链接，最后把 code 放回去。
+function mdInline(s){
+  const codes = [];
+  s = String(s).replace(/`([^`]+)`/g, (m, c) => {
+    codes.push(c); return "\uE000" + (codes.length - 1) + "\uE000";
+  });
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>");
+  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<i>$2</i>");
+  // 链接：URL 里**允许一层括号**（javascript:alert(1) 这种不然会被截断、还留个孤立的 )），
+  // 只放行 http/https/mailto/站内相对路径；不放行的按惯例**原样显示**（不吞内容）。
+  s = s.replace(/\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g, (m, t, u) =>
+    /^(https?:\/\/|mailto:|\/)/i.test(u)
+      ? `<a href="${u}" target="_blank" rel="noopener">${t}</a>` : m);
+  return s.replace(/\uE000(\d+)\uE000/g, (m, i) => `<code>${escHtml(codes[+i])}</code>`);
+}
+
+// 块级：一行一行看。代码块单独抠（里面的内容不做任何 Markdown 处理）。
+// safe=true：**只渲染 Markdown，原生 HTML 一律转义**。给"内容里嵌着外部数据"的地方用
+// （比如批准卡的预览 —— 它里面嵌着**档案 OCR 出来的材料名**，不能当 HTML 跑）。
+function mdToHtml(src, safe){
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let i = 0, para = [], list = null;               // list = "ul" | "ol" | null
+  const inline = t => mdInline(safe ? escHtml(t) : mdText(t));
+  const closeList = () => { if(list){ out.push(`</${list}>`); list = null; } };
+  const flushPara = () => {
+    if(para.length){ out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; }
+  };
+  while(i < lines.length){
+    const ln = lines[i];
+    // —— 代码块 ```（**流式时经常还没闭合**：那就把剩下的都当代码块，看着才不跳）——
+    const fence = ln.match(/^\s*```(.*)$/);
+    if(fence){
+      flushPara(); closeList();
+      const lang = fence[1].trim();
+      const buf = [];
+      i++;
+      while(i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;                                          // 跳过收尾的 ```
+      out.push(`<pre><code${lang ? ` class="lang-${escHtml(lang)}"` : ""}>`
+               + escHtml(buf.join("\n")) + "</code></pre>");
+      continue;
+    }
+    if(!ln.trim()){ flushPara(); closeList(); i++; continue; }
+    // —— 标题 ——
+    const h = ln.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ flushPara(); closeList(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    // —— 分割线 ——
+    if(/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(ln)){ flushPara(); closeList(); out.push("<hr>"); i++; continue; }
+    // —— 表格（| a | b | 且下一行是 |---|---|）——
+    if(/^\s*\|.*\|\s*$/.test(ln) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i+1] || "")){
+      flushPara(); closeList();
+      const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(x => inline(x.trim()));
+      const head = cells(ln); i += 2;
+      const body = [];
+      while(i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(cells(lines[i++]));
+      out.push("<table><thead><tr>" + head.map(c => `<th>${c}</th>`).join("")
+               + "</tr></thead><tbody>"
+               + body.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("")
+               + "</tbody></table>");
+      continue;
+    }
+    // —— 引用 ——
+    const q = ln.match(/^\s*>\s?(.*)$/);
+    if(q){ flushPara(); closeList(); out.push(`<blockquote>${inline(q[1])}</blockquote>`); i++; continue; }
+    // —— 列表（有序 / 无序）——
+    const ul = ln.match(/^\s*[-*+]\s+(.*)$/), ol = ln.match(/^\s*\d+[.)]\s+(.*)$/);
+    if(ul || ol){
+      flushPara();
+      const want = ul ? "ul" : "ol";
+      if(list !== want){ closeList(); out.push(`<${want}>`); list = want; }
+      out.push(`<li>${inline((ul || ol)[1])}</li>`);
+      i++; continue;
+    }
+    closeList(); para.push(ln); i++;
+  }
+  flushPara(); closeList();
+  return out.join("\n");
+}
+
+// 所有"助手/用户说的话"都从这里出去（流式与历史回放是同一条路）
+// safe=true → 原生 HTML 转义、只渲染 Markdown（见 mdToHtml 的注释）
+function renderMsgText(el,txt,safe){
+  el.classList.add("md");                 // 关掉 .m 的 pre-wrap：换行交给 <p>/<br> 管
+  el.innerHTML = mdToHtml(txt, safe);
+}
+// 对话流里的“一段文字”：tool/render/批准/报错 都会切断它，让后面的话另起一个气泡。
+// 懒创建（第一片 delta 到达时才建气泡），这样多步任务的顺序才对：
+//   前言 → → 调用工具 → 答复，而不是全挤在最早那个气泡里。
+let box=null, acc="", raf=0;
+function paintDelta(){                     // 把累积到的文字画进当前气泡
+  raf=0;
+  if(!box) return;                         // 可能已被 tool/render 切断
+  renderMsgText(box,acc);
+  const m=$("#msgs"); m.scrollTop=m.scrollHeight;   // 逐字追加时跟着滚，否则看不到新字
+}
+function breakBubble(){ box=null; acc=""; }
+
+// —— 等待态（见上面 .pending 的样式注释）——
+// 生命周期：send() 时出现 → stage 事件换一次文案 → 第一个 delta/tool/render/出错时消失。
+// ★ 它是**纯前端、不落盘**的临时节点：刷新回放里不该出现，所以不走 addMsg/卡片那套。
+let pendEl=null, pendT0=0, pendTimer=null, pendBase="";
+const PEND_SLOW_MS = 8000;      // 超过这个时长就开始报秒数（数字在走 = 还活着）
+function pendingPaint(){
+  if(!pendEl) return;
+  const s = Math.round((Date.now()-pendT0)/1000);
+  const slow = Date.now()-pendT0 >= PEND_SLOW_MS;
+  const t = pendEl.querySelector(".txt"), sec = pendEl.querySelector(".sec");
+  t.textContent = slow ? "还在处理，已等 " : pendBase;
+  sec.textContent = slow ? s + " 秒…" : "";
+}
+function clearPending(){
+  if(pendTimer){ clearInterval(pendTimer); pendTimer=null; }
+  if(pendEl){ pendEl.remove(); pendEl=null; }
+}
+function showPending(text){
+  clearPending();
+  pendT0 = Date.now(); pendBase = text;
+  pendEl = document.createElement("div");
+  pendEl.className = "pending";
+  pendEl.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>'
+                   + '<span><span class="txt"></span><span class="sec"></span></span>';
+  $("#msgs").appendChild(pendEl);
+  pendingPaint();
+  pendTimer = setInterval(()=>{                 // 每 0.5 秒重画一次：秒数才跳得动
+    if(!pendEl){ clearPending(); return; }
+    pendingPaint();
+    const m=$("#msgs"); m.scrollTop=m.scrollHeight;
+  }, 500);
+}
+function setPending(text){ if(pendEl){ pendBase=text; pendingPaint(); } }
+
+async function send(text,opts={}){
+  if(!opts.fromApprove){ addMsg("u",esc(text)); }
+  breakBubble(); setSend(false);
+  // 先"正在理解"——路由（判词）这一段最长，先给个交代，别让界面一片死寂
+  showPending("正在理解你的意思…");
+  try{
+    const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:text,thread_id:threadId})});
+    await readSSE(resp,ev=>{
+      if(ev.type==="meta"){ threadId=ev.thread_id;
+        localStorage.setItem("stLast",JSON.stringify({thread:threadId}));
+        markHistory(); refreshHistory(); }
+      else if(ev.type==="stage"){ setPending(ev.text||"正在思考…"); }   // 路由结束、开始生成
+      // 正文流：用 rAF 按帧合并重绘（每个字都重排太浪费），并懒创建气泡
+      else if(ev.type==="delta"){
+        clearPending();                        // 真字来了，等待态退场
+        if(!box) box=addMsg("a","");
+        acc+=ev.text;
+        if(!raf) raf=requestAnimationFrame(paintDelta);
+      }
+      else if(ev.type==="tool"){ clearPending(); addMsg("tool",toolChip(ev)); breakBubble(); }
+      else if(ev.type==="render"&&ev.card){ clearPending(); renderCard(ev.card); breakBubble(); }   // 渲染即工具：卡片长在对话流里
+      else if(ev.type==="approval_request"){
+        clearPending(); showAppr(ev.tool,ev.label,ev.arguments,ev.preview); breakBubble();
+      }
+      else if(ev.type==="error"){ clearPending(); addMsg("err",esc(ev.text||"出错")); breakBubble(); }
+      else if(ev.type==="done"){ refreshHistory(); syncThreadJob(); }
+    });
+  }catch(e){ clearPending(); addMsg("err",esc("请求失败："+e)); }
+  finally{ clearPending();                                              // 兜底：任何出口都别留下等待态
+           if(raf){ cancelAnimationFrame(raf); raf=0; } paintDelta();   // 把最后一帧画完
+           setSend(true); refreshProducts(); }
+}
+// ── 批准卡 ───────────────────────────────────────────────────────────
+// ★ 显示 **`Tool.label`（人话）**，不是 `archive.apply_learning` 这种内部名 ——
+//   用户看不懂后者（conventions 里 09-12 那条规矩就是为这个定的）。
+//   原始工具名 + 完整参数收进 title（鼠标停上去才看），参数另用暗色小字列 k=v。
+// ★ **实时与"刷新后重画"走同一个函数**：以前刷新之后这张卡根本不会重画，用户会卡在
+//   "agent 在等允许、屏幕上却什么都没有"——只能盲敲"允许"。
+function apprCard(tool,label,args,preview){
+  const leaf=String(tool||"").split(".").pop();
+  const name=String(label||"").trim()||leaf;          // 没写 label 就退回叶子名（不会空白）
+  const a=args||{}, keys=Object.keys(a);
+  const detail=String(tool||"")+(keys.length?"  "+JSON.stringify(a):"");
+  const brief=keys.slice(0,3).map(k=>`${k}=${a[k]}`).join(" ").slice(0,60);
+  // ★ preview 是**工具自己算的**"这一步到底要做什么"（`Tool.preview`）——
+  //   光有 label（"把口径写进去"）用户不知道在批准什么，尤其是"要写的内容是现算的"那种。
+  const pv=String(preview||"").trim();
+  return `<div class="caph">⚠️ <b>需要你确认</b><span>确认后才会执行</span></div>
+    <div class="apw" title="${esc(detail)}"><span class="ti">⚙</span><span>${esc(name)}</span>${
+      brief?`<span class="ta">${esc(brief)}</span>`:""}</div>
+    ${pv?`<div class="apv"></div>`:""}
+    <div class="row" style="margin:8px 0 0">
+      <button class="mini" onclick="approve(true)">允许</button>
+      <button class="ghost mini" onclick="approve(false)">拒绝</button>
+    </div>`;
+}
+function showAppr(tool,label,args,preview){
+  const d=document.createElement("div"); d.className="card-m apcard";
+  d.innerHTML=apprCard(tool,label,args,preview);
+  const v=d.querySelector(".apv");
+  // ★ 预览走 Markdown 渲染（`**十**` 要显示成加粗，不是原样文字），但**必须 safe**：
+  //   预览里嵌着档案 OCR 出来的材料名，那是外部数据 —— 当 HTML 跑就等于给"一份做过
+  //   手脚的档案"开了个在用户浏览器里执行的口子。safe 只让 Markdown 生效、HTML 全转义。
+  if(v) renderMsgText(v, preview, true);
+  $("#msgs").appendChild(d);
+  $("#msgs").scrollTop=$("#msgs").scrollHeight;
+  return d;
+}
+function approve(allow){ send(allow?"允许":"拒绝",{fromApprove:true}); }
+function setSend(on){ $("#btnSend").disabled=!on; $("#inp").disabled=!on; }
+async function syncThreadJob(){
+  if(!threadId) return;
+  try{
+    const sd=await (await fetch(`/api/sessions/${threadId}`)).json();
+    watchThreadJob(sd);
+  }catch(e){ /* 会话可能刚切走 */ }
+}
+
+// ══ 渲染器注册表（对话式改造核心）：card.type → 画进对话流的 HTML ══
+// agent 工具返回 render → 后端转 render 事件 → 这里按 type 挑渲染器。
+// 卡片不是"另一个页面"，而是 agent 的输出通道（像 claude code 的 diff 块）。
+const CATS=[["一","履历类"],["二","自传思想"],["三","考核鉴定"],["四-1","学历学位"],
+  ["四-2","职称"],["四-3","学术评鉴"],["四-4","教育培训"],["五","政审审核"],
+  ["六","党团"],["七","表彰奖励"],["八","处分"],["九-1","工资"],["九-2","任免"],
+  ["九-3","出国"],["九-4","录用其他"],["十","其他"]];
+function catLabel(c){ const hit=CATS.find(x=>x[0]===c); return c+(hit?(" "+hit[1]):""); }
+function fileExt(n){ const m=/(\.[^.]+)$/.exec(n||""); return (m?m[1].slice(1):"").toUpperCase(); }
+function fileRow(f){ const href=f.url||("/api/files/"+f.id);
+  const ext=fileExt(f.name)||"FILE";
+  return `<a href="${esc(href)}" target="_blank" title="${esc(f.name||"")}">
+    <span class="fx">${esc(ext)}</span><span class="fn">${esc(f.name||"下载文件")}</span>
+    <span class="act">打开</span></a>`; }
+
+function renderCard(card){
+  const fn=RENDERERS[card.type];
+  if(!fn){ addMsg("tool","（未知卡片类型："+esc(card.type)+"）"); return; }
+  const d=document.createElement("div"); d.className="card-m";
+  d.innerHTML=fn(card);
+  $("#msgs").appendChild(d);
+  $("#msgs").scrollTop=$("#msgs").scrollHeight;
+  return d;
+}
+// overview 预填：点条目 → 一句话放进输入框，用户确认发送（一切"操作"走对话）
+window.prefill=t=>{ $("#inp").value=t; $("#inp").focus(); };
+
+// 就地放大：点缩略图 → 在这条材料下面直接展开大图，可翻看这份材料的各页。
+// 看图是"看"不是"操作"，所以不走对话、不调工具（再点一次收起）。
+// 卡片撑开/收回：放大时才给 .card-m 加 zooming（见样式注释），收起务必撤掉，
+// 否则卡片会一直维持在 88% 宽、其它卡片看着就不齐了。
+window.zoomCard=(node,on)=>{
+  // .prog = 识别进度面板（也是"就地放大会被宽度卡住"的容器，和卡片同一个道理）
+  const c=node.closest(".card-m")||node.closest(".prog");
+  if(c) c.classList.toggle("zooming", !!on);
+};
+
+// 大图收起后，如果它所在的**识别进度面板**因为开图被暂停重绘过，立刻补一次重绘。
+// （见 setJobEl 的注释：轮询每秒重绘会把大图抹掉，所以开图期间跳过重绘、把快照存着。）
+// 参数是**装大图的容器**（.prog 本身；调用方在 z.remove() 之前把 parentElement 取好）
+function progResume(container){
+  if(container&&container.classList&&container.classList.contains("prog")&&container._snap)
+    window.setJobEl(container.dataset.job, container._snap, container._done);
+}
+
+// 进度面板的缩略图：点一下**就地放大**（照搬 overview 那套灯箱：点空白处 / Esc / 「收起」
+// 三条路都能关，见 zoomArm/zoomOnDoc/zoomCloseAll）。差别只有两点：
+//   ① 没有翻页（面板就一页），保留了旋转（看歪的翻拍件时用得着）；
+//   ② 大图用**原图**而不是缩略图 —— 缩略图只有 160px 宽，放大它就是糊的，
+//      而用户点开的目的恰恰是"看清楚字"。一次只加载一张，开销可接受。
+window.zoomImage=el=>{
+  const wrap=el.closest(".prog"); if(!wrap) return;
+  if(wrap.querySelector(".zoom")){ window.zoomCloseAll(); return; }   // 已经开着 → 收起
+  zoomArm();                                  // 挂上"点外面收起"（延一个事件循环，见其注释）
+  window.zoomCard(wrap, true);                // 撑开面板，图才放得大
+  const big=String(el.getAttribute("src")||"").replace(/[?&]thumb=1/, "");  // 去掉缩略图开关
+  const box=document.createElement("div"); box.className="zoom";
+  box.innerHTML=
+    `<div class="bigbox"><span class="rotwrap"><img class="bigpage" alt="正在识别的这一页"
+        onclick="spinImg(this,90)" title="点图片转 90°（也可用旁边的左转/右转）"
+        src="${esc(big)}"></span></div>
+     <div class="zbar">
+       <span>第 ${esc(el.dataset.seq||"")} / ${esc(el.dataset.total||"")} 张</span>
+       <button class="ghost mini" onclick="spinImg(this,-90)">↺ 左转</button>
+       <button class="ghost mini" onclick="spinImg(this,90)">↻ 右转</button>
+       <span class="zdeg"></span>
+       <button class="ghost mini" onclick="zoomClose(this)">收起</button>
+     </div>`;
+  wrap.appendChild(box);
+  spinApply(box);
+};
+
+// —— 点大图以外的地方收起（灯箱式）——
+// 判据很直白：点在**图本身**或**翻页/旋转那条工具栏**上就不关，其余一律关
+// （图四周的灰边、卡片外、侧栏、消息区……用户说"点侧边空白地方"就是这些地方）。
+let _zoomDoc=null;
+function zoomDisarm(){
+  if(_zoomDoc){ document.removeEventListener("click", _zoomDoc); _zoomDoc=null; }
+}
+function zoomOnDoc(e){
+  const t=e.target;
+  if(!(t instanceof Element)) return zoomCloseAll();
+  if(t.closest(".bigpage")) return;            // 点在图本体上 → 别关（他可能只是随手点一下）
+  if(t.closest(".zbar"))     return;           // 工具栏交给按钮自己处理（含「收起」）
+  zoomCloseAll();
+}
+window.zoomCloseAll=()=>{
+  zoomDisarm();
+  document.querySelectorAll(".zoom").forEach(z=>{
+    window.zoomCard(z,false);
+    const parent=z.parentElement;
+    z.remove();
+    progResume(parent);          // 进度面板若被暂停重绘 → 补一次
+  });
+};
+function zoomArm(){
+  zoomDisarm();
+  // ★ 延到下一个事件循环再挂：不然"点开大图的那一下"会立刻冒泡到 document、
+  //   把刚打开的图当场关掉（toggle 类交互的经典坑）。
+  setTimeout(()=>{ _zoomDoc=zoomOnDoc; document.addEventListener("click", _zoomDoc); }, 0);
+}
+// Esc 也能收起（大图盖了大半屏，用户第一反应往往是按 Esc）
+document.addEventListener("keydown", e=>{
+  if(e.key==="Escape" && document.querySelector(".zoom")) window.zoomCloseAll();
+});
+
+window.zoomRow=el=>{
+  const wrap=el.closest(".mrowwrap"); if(!wrap) return;
+  const old=wrap.querySelector(".zoom");
+  if(old){ window.zoomCloseAll(); return; }              // 已经开着 → 收起
+  zoomArm();                                             // 开一个就挂上"点外面收起"
+  window.zoomCard(wrap,true);                            // 撑开卡片，图才放得大
+  const imgs=[...wrap.querySelectorAll(".mthumb")];
+  const pages=imgs.map(im=>im.dataset.seq);              // 这份材料的每一页
+  const proj=el.dataset.proj||"";
+  let i=Math.max(0,imgs.indexOf(el));                    // 从被点的那张开始
+  const box=document.createElement("div"); box.className="zoom";
+  const draw=()=>{
+    const one=pages.length<=1;
+    box.innerHTML=
+      `<div class="bigbox"><span class="rotwrap"><img class="bigpage" alt="第${pages[i]}张"
+         onclick="spinImg(this,90)" title="点图片转 90°（也可用旁边的左转/右转）"
+         src="/api/archive/page/${pages[i]}?project=${encodeURIComponent(proj)}"></span></div>
+       <div class="zbar">
+         ${one?"":`<button class="ghost mini" ${i?"":"disabled"} onclick="zstep(this,-1)">‹ 上一页</button>`}
+         <span>第 ${pages[i]} 张${one?"":`（${i+1}/${pages.length}）`}</span>
+         ${one?"":`<button class="ghost mini" ${i<pages.length-1?"":"disabled"} onclick="zstep(this,1)">下一页 ›</button>`}
+         <button class="ghost mini" onclick="spinImg(this,-90)">↺ 左转</button>
+         <button class="ghost mini" onclick="spinImg(this,90)">↻ 右转</button>
+         <span class="zdeg">${box._rot?`已转 ${box._rot}°`:""}</span>
+         <button class="ghost mini" onclick="zoomClose(this)">收起</button>
+       </div>`;
+    spinApply(box);                          // 翻页/重画后保持当前旋转角
+  };
+  box._set=n=>{ i=n; draw(); };
+  box._get=()=>i;
+  wrap.appendChild(box); draw();
+};
+window.zstep=(btn,d)=>{ const b=btn.closest(".zoom"); b._set(b._get()+d); };
+// 「收起」按钮：拆掉大图块，并把卡片宽度还给原来的样子（两步都要做）
+window.zoomClose=el=>{
+  const z=el.closest(".zoom");
+  if(z){
+    window.zoomCard(z,false);
+    const parent=z.parentElement;
+    z.remove();
+    progResume(parent);               // 进度面板若被暂停重绘 → 补一次
+  }
+  zoomDisarm();                       // 关了就把"点外面收起"的监听摘掉，别留悬空监听
+};
+
+// 查看时旋转：只在浏览器里转（瞬时、不落盘、不调后端），方便你转着找正确方向。
+// 确认好方向后，在对话里说一句「把照片逆时针转 90 度」——那才会写进数据、影响最终 PDF。
+// 大图可用的最大高度：与样式表里 `.zoom .bigpage` 的 calc(100vh - 240px) **保持一致**。
+// 两处都写是因为内联样式优先级更高，转正/转歪要各用一套上限 —— 但它们得是同一个数，
+// 不然转一下图就跳成另一个尺寸。
+const ZOOM_MAX_H = () => Math.max(320, window.innerHeight - 240);
+function spinApply(box){
+  const img=box.querySelector(".bigpage"); if(!img) return;
+  const wrap=img.parentElement;              // .rotwrap（见样式注释）
+  const r=box._rot||0, swap=(r%180)!==0;     // 转 90/270 时宽高互换
+  img.style.transform=`rotate(${r}deg)`;
+  if(!swap){
+    // ★ 未旋转时**把内联样式清空**，交回给样式表 —— 这里原先写死 maxHeight=420px，
+    //   内联优先级高于 .zoom .bigpage，于是无论样式表怎么调，图都被钉死在 420px 高
+    //   （实测只有 315×420，而可用宽度有 1048px）。别再把像素值写回来。
+    img.style.maxWidth=""; img.style.maxHeight="";
+    img.style.width=""; img.style.height="";
+    img.style.position=""; img.style.left=""; img.style.top="";
+    if(wrap){ wrap.style.width=""; wrap.style.height=""; }
+    return;
+  }
+  // —— 旋转 90/270：**把盒子做成旋转后的形状**，否则布局还按原尺寸占位 ——
+  // 实测（1280×900）：竖版图 541×722 转 90° 后，可视变成 963×722，可元素盒子仍是
+  // 722×963，容器跟着占 977 高 → 图下面空出 250+px，把翻页条和进度行全推下去
+  // （用户截图里"旋转后页面显示有 bug"就是这个）。transform 不影响布局，只能自己算。
+  // 图还没 load 完时量不出自然尺寸（naturalWidth=0）→ 等 load 再算一次，别拿 0 去算
+  if(!img.complete || !img.naturalWidth){
+    img.addEventListener("load", ()=>spinApply(box), {once:true});
+    return;
+  }
+  const avH = ZOOM_MAX_H();                              // 可用高（可视高上限）
+  const natW = img.naturalWidth, natH = img.naturalHeight;
+  const w = Math.min(avH, natW);                         // 元素宽 —— 转完后变成**可视高**
+  const h = Math.round(w * natH / natW);                 // 元素高 —— 转完后变成**可视宽**
+  img.style.maxWidth="none"; img.style.maxHeight="none";
+  img.style.width=w+"px"; img.style.height=h+"px";
+  img.style.position="absolute";
+  // 让元素的中心 = 外层的中心，旋转才是绕中心转的（外层是 h×w，元素是 w×h）
+  img.style.left=Math.round((h-w)/2)+"px";
+  img.style.top =Math.round((w-h)/2)+"px";
+  if(wrap){ wrap.style.width=h+"px"; wrap.style.height=w+"px"; }
+}
+window.spinImg=(btn,d)=>{
+  const box=btn.closest(".zoom");
+  box._rot=((box._rot||0)+d+360)%360;        // 可以一直点，转满一圈回到 0
+  spinApply(box);
+  const t=box.querySelector(".zdeg"); if(t) t.textContent=box._rot?`已转 ${box._rot}°`:"";
+};
+
+const RENDERERS={
+  // 文件卡片：产物下载（4件套 / 周报 / 任意文件引用）
+  "file-card":c=>`<div class="caph">📎 <b>产物文件</b>${c.note?` <span>${esc(c.note)}</span>`:""}</div>
+    <div class="fcard">${(c.files||[]).map(f=>fileRow(f)).join("")||'<span class="hint">（无）</span>'}</div>`,
+  // 上传卡片：用户在自己电脑选照片 → 传服务器 → 目录自动发给 agent
+  // 上传卡片：事件一律**内联 + 相对查找**（不用 id，也不在渲染后用 setTimeout 补绑）。
+  // ★ 为什么（09-12 用户报"框子点不动"查出来的）：renderCard 是"先 innerHTML、后插入
+  //   文档"，所以渲染器拿不到自己的元素、只能等插入后用全局 id 去补绑；而对话里只要
+  //   有**第二张**上传卡片，`$("#upZone")` 永远命中第一张 —— 新卡片就成了死框（实测
+  //   两张卡片时第二张的 onclick 是 null）。内联属性在元素插入时自然生效，`this`
+  //   就是被点的那个元素，再用 closest/querySelector 在**本卡片内**找兄弟节点，
+  //   几张卡片互不干扰。顺带把那个 setTimeout 也去掉了。
+  // 两种用途共用一张卡：purpose="xlsx" 收"用户改过的终版目录"，默认收翻拍照片。
+  // ★ 复用同一个渲染器而不是新写一张卡：选文件、显示已选、两步制提交这套行为一模一样，
+  //   只有 accept/端点/文案不同 —— 分两个渲染器迟早有一边忘了改（仓库里踩过）。
+  "upload-card":c=>c.purpose==="xlsx"?`<div class="caph">📄 <b>上传你改过的目录</b></div>
+      <div class="upc" data-project="${esc(c.project||"")}" onclick="recOpen(this)">
+        <b>选择你改过的那份《…人事档案目录.xlsx》</b>
+        <div class="hint upcnt">还没有选文件</div></div>
+      <button class="mini upgo" style="display:none;margin-top:8px"
+        onclick="recGo(this)">开始对账</button>
+      <input class="upfin" type="file"
+        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        style="display:none" onchange="recPick(this)">`
+    :`<div class="caph">📁 <b>选择翻拍照片</b></div>
+      <div class="upname"><label>干部姓名</label>
+        <input class="upnm" type="text" placeholder="没填我会先问你"></div>
+      <div class="upc" onclick="upOpen(this)"><b>${esc(c.hint||"选择这卷翻拍照片的文件夹/多张照片")}</b>
+        <div class="hint upcnt">还没有选照片（可分几次选，自动合并）</div></div>
+      <button class="mini upgo" style="display:none;margin-top:8px"
+        onclick="upGo(this)">开始上传</button>
+      <input class="upfin" type="file" accept="image/*" multiple webkitdirectory
+        style="display:none" onchange="upPick(this)">`,
+  // 页卡片：某页原图 + 识别出的内容卡字段
+  "page-card":c=>`<div class="caph">🖼 <b>第${c.seq}页</b>${c.doubt?' <span style="color:var(--warn)">（存疑）</span>':""}</div>
+    ${c.img?`<img class="page" src="${esc(c.img)}" onclick="this.style.maxHeight=this.style.maxHeight?'300px':'none'">`:""}
+    <div class="kv">
+      ${c.title?`<span class="k">标题</span><span>${esc(c.title)}</span>`:""}
+      ${c.doc?`<span class="k">文号</span><span>${esc(c.doc)}</span>`:""}
+      ${c.date?`<span class="k">日期</span><span>${esc(c.date)}</span>`:""}
+      ${c.summary?`<span class="k">要点</span><span>${esc(c.summary)}</span>`:""}
+    </div>
+    <div class="row" style="margin:6px 0 0"><button class="ghost mini" onclick="prefill('第${c.seq}页有问题，换一家OCR对比')">换一家OCR对比</button></div>`,
+  // 全景卡：十类桶只读视图；点条目 = 预填一句修改话术（用户确认后发送）
+  "overview":c=>{
+    const order=[...CATS.map(x=>x[0]),"?"].filter(k=>(c.cats||[]).some(g=>g.category===k));
+    const cats=(c.cats||[]).slice().sort((a,b)=>order.indexOf(a.category)-order.indexOf(b.category));
+    return `<div class="caph">📋 <b>全景 · ${esc(c.person||"")}的卷</b>
+        <span>${(c.cats||[]).reduce((n,g)=>n+g.n,0)} 份材料</span>
+        ${c.issues&&c.issues.length?`<span style="color:var(--warn)">⚠ ${c.issues.length} 项待核对</span>`:""}
+        ${c.channel?`<span class="hint" title="换一家识图模型读的结果就切过去看，两家的结果都在">👁 ${esc(c.channel)} 读的</span>`:""}</div>
+      ${c.issues&&c.issues.length?`<div class="hint" style="color:var(--warn);margin-bottom:4px">${c.issues.slice(0,3).map(i=>esc(i.message)).join(" · ")}${c.issues.length>3?" …":""}</div>`:""}
+      ${cats.map(g=>g.n?`<div class="catrow">
+        <div class="ch" onclick="const el=this.nextElementSibling;el.style.display=el.style.display==='none'?'block':'none'">▸ ${esc(catLabel(g.category))}（${g.n}）</div>
+        <div class="items">${g.items.map(m=>`<div class="mrowwrap">
+          <div class="mrow" onclick="prefill('${m.uid}《${esc(m.title)}》怎么改？')">
+            <span class="thumbs">${(m.thumbs||[]).map((u,i)=>
+              `<img class="mthumb" loading="lazy" src="${esc(u)}"
+                 data-seq="${(m.pages||[])[i]}" data-proj="${esc(c.project||"")}"
+                 title="第${(m.pages||[])[i]}张 · 点开放大"
+                 onclick="event.stopPropagation();zoomRow(this)">`).join("")}</span>
+            <span class="tt">${esc(m.title)}</span>
+            <span class="pg">第${(m.pages||[]).join(",")}张${m.copies>1?` · 一式${m.copies}份`:""}</span>
+            ${m.doubt?'<span class="doubt">存疑</span>':""}
+          </div>
+        </div>`).join("")}</div>
+      </div>`:`<div class="catrow"><div class="ch" style="color:var(--dim);cursor:default">${esc(catLabel(g.category))}（0）</div></div>`).join("")}`;
+  },
+  // 对比卡：新旧 OCR 并排 + "采用"按钮（按钮也只是预填话术，一切走对话）
+  "diff-card":c=>{
+    setTimeout(()=>{ const b=$("#dcardAdopt"); if(b) b.onclick=()=>prefill(`第${c.seq}页采用新读法`); },0);
+    return `<div class="caph">⚖ <b>第${c.seq}页 · OCR 对比</b><span>新通道：${esc(c.channel||"")}</span></div>
+      <div class="cmp2">
+        <div><div class="lab">旧读法</div><b>${esc((c.old||{}).title||"（空）")}</b>
+          <div class="hint">文号[${esc((c.old||{}).doc||"")}] ${esc((c.old||{}).summary||"")}</div></div>
+        <div><div class="lab">新读法</div><b>${esc((c.new||{}).title||"（空）")}</b>
+          <div class="hint">文号[${esc((c.new||{}).doc||"")}] ${esc((c.new||{}).summary||"")}</div></div>
+      </div>
+      <div class="row" style="margin:6px 0 0"><button class="mini" id="dcardAdopt">采用新读法</button></div>`;
+  },
+  // 口径学习卡：系统学到的识图口径，等用户点头才写进《文种对照》。
+  // ★ 按钮只**预填一句确认话术**（与其他卡片一致）—— 真正落盘由模型调
+  //   archive.apply_learning 完成，而它是 approve 类：用户还要再点一次「允许」。
+  //   所以"必须用户确认"是实打实的，并且**只有一条写路径**（那条路才过闸）。
+  "learn-card":c=>`<div class="caph">🎓 <b>学到的口径</b>${
+      (c.items||[]).length?"<span>确认后写进《文种对照》，下次识别就按它判</span>":""}</div>
+    ${(c.items||[]).length?c.items.map(it=>`<div class="lrow">
+        <div class="lwhy">${esc(it.why||"")}${it.count>1?` <span class="hint">（第 ${it.count} 次）</span>`:""}</div>
+        <div class="lentry">${mdInline(escHtml(it.entry||""))}</div>
+        ${it.drop?`<div class="hint" style="margin-top:4px">同时把基础口径里冲突的那一个文种摘掉：<code>${esc(it.drop.token)}</code>（原判 ${esc(it.drop.old)}），同行其余文种保留。</div>`:""}
+      </div>`).join("")
+      :`<div class="hint">${esc(c.note||"目前没有待确认的口径提案。")}</div>`}
+    ${(c.items||[]).length?`<div class="row" style="margin:6px 0 0">
+      <button class="mini" onclick="learnGo()">确认，写进去</button>
+      <button class="ghost mini" onclick="prefill('这条口径先不用学')">不用了</button></div>`:""}
+    ${c.file?`<div class="hint" style="margin-top:4px">将写入 <code>${esc(c.file)}</code></div>`:""}
+    ${c.note&&(c.items||[]).length?`<div class="hint" style="margin-top:4px">${esc(c.note)}</div>`:""}`
+};
+
+// ── 上传卡片动作：选照片 → POST /api/photos → 把服务器目录作为消息发给 agent ──
+// 从选中的文件里猜"这一卷是谁的"：文件夹选择时文件带 李明/xxx.jpg 相对路径
+function folderLabel(files){
+  for(const f of files){
+    const seg=(f.webkitRelativePath||"").split("/")[0];
+    if(seg && seg!==f.name) return seg;
+  }
+  return "档案照片";
+}
+// 上传卡片：选完先攒着，点「开始上传」才真的传。
+// ★ 为什么要分两步（09-12 用户实测反馈）：原来"选完立刻上传"，而人名是在**选中的
+//   那一刻**读的 —— 自然顺序是先点框选文件夹、后填名字，于是名字永远来不及填，
+//   "能填姓名"这个功能等于没有。现在选与传分离，姓名在点上传前都能改。
+// ★ 为什么全部用"元素相对查找"（upCard 往上找 .card-m、再在卡片内找兄弟）而不用
+//   id：同一段对话里可以有多张上传卡片，全局 id 查询只会命中第一张（见渲染器注释）。
+function upCard(el){ return el.closest(".card-m"); }        // 所在的整张卡片
+// 待上传队列挂在**卡片元素自己**身上（`card._upFiles`）—— 两张卡片各攒各的，不串。
+function upName(card){ const i=card.querySelector(".upnm"); return i ? i.value.trim() : ""; }
+// 点虚线框 → 打开**本卡片**的文件选择器。
+// ★ 注意从整张卡片找 .upfin（不是从 box 里找）：.upfin 是 .upc 的**兄弟**节点，
+//   写在 box.querySelector 里会永远返回 null、点击静默无反应（写完就这么错过一次）。
+function upOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
+function upPick(input){
+  const card=upCard(input);
+  card._upFiles=[...(card._upFiles||[]), ...(input.files||[])];   // 可分几次选，合并
+  const cnt=card.querySelector(".upcnt"), go=card.querySelector(".upgo");
+  if(!card._upFiles.length) return;
+  card.querySelector(".upc").classList.add("sel");
+  if(go) go.style.display="";
+  if(cnt) cnt.textContent=`已选 ${card._upFiles.length} 张`
+    + `（${upName(card)||folderLabel(card._upFiles)}） —— 填好姓名后点「开始上传」`;
+}
+async function upGo(btn){
+  const card=upCard(btn), cnt=card.querySelector(".upcnt"), zero=card.querySelector(".upc");
+  const files=card._upFiles||[];
+  if(!files.length) return;
+  const typed=upName(card);                   // ★ 点上传这一刻才读姓名（选完还能改）
+  const folder=folderLabel(files);
+  const label=typed||folder;                  // 目录名：填了用填的，没填用文件夹名（防撞名用）
+  if(cnt) cnt.textContent=`正在上传 ${files.length} 张照片…`;
+  const fd=new FormData();
+  for(const f of files){ if(f instanceof File) fd.append("files",f,f.name); }
+  fd.append("label",label);
+  let r;
+  try{ r=await fetch("/api/photos",{method:"POST",body:fd}); }
+  catch(e){ if(cnt) cnt.textContent="上传失败："+e.message; return; }
+  const d=await r.json().catch(()=>({}));
+  if(!d.dir){ if(cnt) cnt.textContent=(d.detail||d.error||"上传失败，请重试"); return; }
+  if(zero) zero.classList.add("sel");
+  if(cnt) cnt.textContent=`已上传 ${d.count} 张（${label}）。`;
+  card._upFiles=[];
+  const go=card.querySelector(".upgo"); if(go) go.style.display="none";
+  // ★ 消息里必须带上**姓名来源**：agent 得能分辨"用户填的"和"我们从文件夹名猜的"。
+  //   不区分的话，猜来的名字也会被当成用户填的 → "没填就问一句"永远不会触发
+  //   （用户实测反馈：上传完消息里直接写着"126 张，李明"，而他根本没填）。
+  const who = typed ? `姓名：${typed}` : `未填姓名，文件夹名：${folder}`;
+  send(`照片已上传：${d.dir}（${d.count} 张，${who}）`);
+}
+
+// ── 终版目录上传卡动作：选 xlsx → POST /api/archive/reconcile → 把路径发给 agent ──
+// 同"照片上传"一样是**两步制**（选完先攒着、点按钮才真传），事件一律内联 + 相对查找。
+function recOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
+function recPick(input){
+  const card=upCard(input), f=input.files&&input.files[0];
+  if(!f) return;
+  card._xlsx=f;                                   // 待上传的文件挂在卡片自己身上
+  card.querySelector(".upc").classList.add("sel");
+  const go=card.querySelector(".upgo"); if(go) go.style.display="";
+  const cnt=card.querySelector(".upcnt");
+  if(cnt) cnt.textContent=`已选：${f.name} —— 点「开始对账」`;
+}
+async function recGo(btn){
+  const card=upCard(btn), f=card._xlsx, cnt=card.querySelector(".upcnt");
+  if(!f) return;
+  const box=card.querySelector(".upc"), proj=box?(box.dataset.project||""):"";
+  if(cnt) cnt.textContent="正在上传…";
+  const fd=new FormData();
+  fd.append("file",f,f.name);
+  fd.append("project",proj);
+  let r,d;
+  try{ r=await fetch("/api/archive/reconcile",{method:"POST",body:fd}); }
+  catch(e){ if(cnt) cnt.textContent="上传失败："+e.message; return; }
+  d=await r.json().catch(()=>({}));
+  if(!d.path){ if(cnt) cnt.textContent=(d.detail||"上传失败，请重试"); return; }
+  if(cnt) cnt.textContent="已上传，正在对账…";
+  const go=card.querySelector(".upgo"); if(go) go.style.display="none";
+  send(`终版目录已上传：${d.path}（请对账，看我改的和系统生成的有什么不一样）`);
+}
+
+// ── 口径学习卡动作：只预填一句确认话术 ────────────────────────────────
+// 真正的写入交给模型调 archive.apply_learning（approve 类，过宿主的批准闸）。
+// 所以这里**不做任何 fetch** —— 全仓只有一条写路径，闸也只在一处。
+// ★ 预填的话术**不能带"确认/允许/可以"这类批准词**：`guards.APPROVE_WORDS` 里有"确认"，
+//   而 server 的补执行分支排在路由之前 —— 带着批准词的话会被 `classify_answer` 认成
+//   "同意"，去批准 `thread.pending` 里那个工具。那张卡可能完全是另一件事
+//   （review 抓到：学习卡的按钮会顺手把挂起的「导出」批准掉）。
+function learnGo(){ prefill("就把这条口径写进《文种对照》"); }
+
+// ── 识别 job 跟随：后台跑的时候，在当前对话里长出进度块并自动刷新 ──
+function jobLastMessage(snap){
+  let msg="";
+  for(const ev of (snap&&snap.log)||[]){
+    if(ev.type==="progress" && ev.message) msg=ev.message;
+  }
+  return msg;
+}
+// 进度面板里"当前这一张"：取日志里**最后一条** page 事件（每页建档完推一条）
+function jobLastPage(snap){
+  let last=null;
+  for(const ev of (snap&&snap.log)||[]){
+    if(ev.type==="page") last=ev;
+  }
+  return last;
+}
+// 一张"正在识别"的页卡：缩略图 + 第 N/总 + 读到的字段。就地刷新（不往对话流里堆消息）
+function jobPageHtml(p){
+  if(!p) return "";
+  const kv=[["表头",p.title],["日期",p.date],["文号",p.doc],["要点",p.summary]]
+    .filter(([,v])=>v).map(([k,v])=>`<span class="k">${k}</span><span>${esc(v)}</span>`).join("");
+  return `<div class="jpage">
+    ${p.img?`<img src="${esc(p.img)}" loading="lazy" data-seq="${esc(p.seq)}"
+        data-total="${esc(p.total)}" onclick="zoomImage(this)"
+        title="点开看大图（点空白处或按 Esc 收起）">`:""}
+    <div class="jmeta">
+      <div class="jcnt">第 ${p.seq} / ${p.total} 张${p.cached?' <span class="hint">（缓存命中）</span>':""}</div>
+      ${kv?`<div class="kv">${kv}</div>`:`<div class="hint">这一页读不出内容（待人工核对）</div>`}
+    </div></div>`;
+}
+function setJobEl(jobId, snap, done){
+  const el=document.querySelector(`.prog[data-job="${jobId}"]`); if(!el) return;
+  // ★ 大图开着的时候**先别重绘**：轮询每秒整体重绘 innerHTML，会把用户正看着的大图
+  //   当场抹掉（灯箱是就地展开的 DOM，不在数据里，重绘就没了）。把快照存下来，
+  //   等大图收起时由 progResume() 补一次重绘 —— 状态不会丢。
+  if(el.querySelector(".zoom")){ el._snap=snap; el._done=done; return; }
+  const pct=Number(snap&&snap.progress||0);
+  const msg=jobLastMessage(snap);
+  const page=jobLastPage(snap);
+  if(done && snap && snap.status==="done"){
+    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--ok)">识别完成</b>
+      <span class="hint">${esc(msg||"可以看全景核对了。")}</span>
+      <button class="mini" onclick="send('看看全景')">查看全景</button></div>`;
+  } else if(done){
+    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--err)">识别失败</b>
+      <span class="hint">${esc(msg||"详情见任务日志。")}</span></div>`;
+  } else {
+    // 识别中：上面是"当前这张"的缩略图+内容（就地换），下面是总进度条
+    el.innerHTML=jobPageHtml(page)
+      +`<div class="row" style="margin:0"><span>识别中</span>
+      <progress value="${pct}" max="100"></progress><span>${pct}%</span></div>
+      <div class="hint">${esc(msg||"正在准备…")}</div>`;
+  }
+  $("#msgs").scrollTop=$("#msgs").scrollHeight;
+}
+async function pollJob(jobId, tid){
+  await new Promise(r=>setTimeout(r,1000));
+  if(threadId!==tid){ delete _jobWatchers[jobId]; return; }
+  try{
+    const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
+    if(snap&&snap.status==="running"){
+      setJobEl(jobId,snap,false);
+      pollJob(jobId,tid);
+    } else {
+      setJobEl(jobId,snap,true);
+      delete _jobWatchers[jobId];
+    }
+  }catch(e){ delete _jobWatchers[jobId]; }
+}
+async function watchThreadJob(sd){
+  const jobId=sd&&sd.job_id, tid=threadId;
+  if(!jobId||!tid||_jobWatchers[jobId]) return;
+  try{
+    const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
+    if(!snap||snap.status!=="running") return;
+    _jobWatchers[jobId]=true;
+    const d=document.createElement("div");
+    d.className="prog"; d.dataset.job=jobId;
+    d.innerHTML="";
+    $("#msgs").appendChild(d);
+    $("#msgs").scrollTop=$("#msgs").scrollHeight;
+    setJobEl(jobId,snap,false);
+    pollJob(jobId,tid);
+  }catch(e){ /* job 可能刚结束/不存在，静默即可 */ }
+}
+
+// ── “我的产物”抽屉：按一次产出分组，最新组展开、更早的折叠 ──
+function fmtWhen(ts){
+  if(!ts) return "";
+  const d=new Date(ts*1000), p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function prodRow(f){
+  const href=f.url||("/api/files/"+f.id), ext=fileExt(f.name)||"FILE";
+  return `<a class="prow" href="${esc(href)}" target="_blank" title="${esc(f.name||"")}">
+    <span class="fx">${esc(ext)}</span><span class="nm">${esc(f.name||"下载文件")}</span>
+    <span class="go">打开</span></a>`;
+}
+function renderProducts(groups){
+  _prodGroups=groups||[];
+  const el=$("#prodList"); if(!el) return;
+  if(!_prodGroups.length){ el.innerHTML='<div class="empty">还没有产物</div>'; return; }
+  el.innerHTML=_prodGroups.map(g=>`<section class="pg">
+    <div class="pg-h" onclick="togglePg(this)">
+      <span class="t">${esc(g.label||"产物")}</span>
+      <span class="meta">${(g.files||[]).length} 个 · ${esc(fmtWhen(g.created))}</span>
+    </div>
+    <div class="pg-b">${(g.files||[]).map(f=>prodRow(f)).join("")}</div>
+  </section>`).join("");
+  // 除最新一组外默认收起，避免“一堆文件”平铺
+  [...el.querySelectorAll(".pg")].forEach((sec,i)=>{
+    if(i>=1){ sec.querySelector(".pg-b").style.display="none"; sec.dataset.open="0"; }
+    else sec.dataset.open="1";
+  });
+}
+function togglePg(h){
+  const sec=h.parentElement, b=sec.querySelector(".pg-b");
+  const open=sec.dataset.open==="1";
+  b.style.display=open?"none":"block";
+  sec.dataset.open=open?"0":"1";
+}
+async function refreshProducts(){
+  if(!me) return;
+  try{
+    const r=await fetch("/api/files"); if(!r.ok) return;
+    const d=await r.json(); renderProducts(d.groups||[]);
+  }catch(e){ /* 抽屉打开失败静默，下次点开再试 */ }
+}
+function toggleProducts(show){
+  $("#prodPanel").style.display=show?"flex":"none";
+  $("#prodScrim").style.display=show?"block":"none";
+  if(show) refreshProducts();
+}
+
+// ── 模型配置弹窗（顶栏 ⚙）─────────────────────────────────────────
+// 配置结构和服务端 station/modelcfg.py 一致，两份：providers[] 是"连接 + 模型名"，
+// slots{} 是四个槽位各自的**降级链**（有序的 provider id，第一位是主通道，后面是
+// 兜底顺序）。改这个弹窗时，槽位清单要和服务端的 SLOT_LABELS 对上。
+// ★ GET 回来的 provider 里**没有明文 key**，只有 has_key / key_source；
+//   提交时 api_key 的三种写法含义不同（不带这个字段=不改 / ""=清空 / 非空=覆盖）。
+let cfgData=null;      // 服务端回来的配置（掩码版）
+let cfgKeys={};        // provider id → 用户刚敲的 key。★ 必须存着：任何结构操作
+                       // （加/移/删 provider、排链）都会重绘 provider 区，不存就会被
+                       // 重绘冲掉、保存时静默丢失（踩过）
+// 槽位 → provider 的角色字段。★ 只有三个：原先的「给材料分类」槽 09-11 砍了，
+// 它和「通用模型」取的是同一个 text_model，档案定类现在走 chat（见 station_adapter）。
+const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model"};
+
+// ★ 面板必须显成 flex：它是「头 / 滚动体 / 钉底保存条」的三段布局，靠 flex 才有
+//   那个钉住的底栏。这里是**内联 style**，优先级高于样式表里的 display:flex ——
+//   写成 "block" 会把样式表里的 display:flex 整个盖掉，面板退化成普通块，
+//   底栏被内容顶到看不见的地方（保存按钮消失）。踩过，别改回 "block"。
+function toggleConfig(show){
+  $("#cfgScrim").style.display=show?"block":"none";
+  $("#cfgPanel").style.display=show?"flex":"none";
+  if(show) cfgLoad();
+}
+
+
+// 「保存 / 添加」的反馈统一写在这条脚注里 —— 它就在「保存」按钮正上方。
+// ★ 别改回写面板最顶上那个 #cfgHint：用户滚到底部点保存时，顶部早在屏幕外了
+//   （实测报错的视口坐标 y=-926），体感就是"点了保存毫无反应"。
+function cfgSay(html, isError){
+  const el=document.getElementById("cfgFootHint");
+  if(!el) return;
+  el.innerHTML=html;
+  if(isError) el.scrollIntoView({block:"nearest"});   // 报错时把它滚进视野
+}
+
+async function cfgLoad(){
+  try{
+    const d=await (await fetch("/api/modelconfig")).json();
+    cfgData=d; cfgKeys={};
+    cfgRender();
+    cfgSay("");
+    $("#cfgHint").innerHTML=d.fake
+      ? '<span class="cfgWarn">离线模式：当前配置不会生效，仅用于界面预览。</span>'
+      : "";
+  }catch(e){ $("#cfgHint").textContent="配置读取失败，请刷新后重试。"; }
+}
+
+// 占位符只放"该干什么"，不放状态 —— 状态已经在卡片标题那行用点 + 文字说了，
+// 两处都写会重复，而且输入框一填占位符就没了，读不到。
+// ★ 别在这儿写 src/.env、环境变量名（GLM_API_KEY）这类只有写代码的人才懂的东西：
+//   这个框是给普通用户看的，他对"哪个文件、哪个变量"毫无概念。
+function cfgKeyPlaceholder(p){
+  if(p.key_source==="db") return "已保存，如需更换请整段替换";
+  if(p.key_source==="env") return "填入自己的密钥可覆盖默认配置";
+  return "粘贴服务商提供的 API Key";
+}
+
+// 密钥框默认是密码框（显示成 ****），点「显示」切成明文、再点切回去。
+// 框里存的就是**真值**（后端只把它回给本人），所以不需要"假星号"那套防覆盖的把戏。
+function cfgTogglePw(pid, btn){
+  const el=document.getElementById("cfgp-"+pid+"-key");
+  if(!el) return;
+  const showing=(el.type==="text");
+  el.type = showing ? "password" : "text";
+  btn.textContent = showing ? "显示" : "隐藏";
+}
+
+// 某家 provider 在某个槽位用哪个模型名（和服务端 _model_for 同口径：
+// 判词没填就跟着文本模型走）。返回空串 = 这家不参与这个槽位。
+function cfgModelOf(p,slot){
+  return (p[CFG_ROLE[slot]]||(slot==="route"?p.text_model:""))||"";
+}
+
+function cfgRender(){
+  if(!cfgData) return;
+  const c=cfgData.config;
+  $("#cfgSlots").innerHTML=cfgData.slots.map(cfgSlotRow).join("");
+  $("#cfgProvs").innerHTML=(c.providers||[]).map(cfgProvRow).join("");
+  // 「＋ 添加模型来源」的下拉：常用模板（服务端给），选中即加一行填好的
+  const sel=$("#cfgAddSel");
+  sel.innerHTML='<option value="">＋ 添加模型来源…</option>'
+    +(cfgData.presets||[]).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join("");
+}
+
+function cfgSlotRow(s){
+  const c=cfgData.config, chain=c.slots[s.id]||[];
+  // 序号只在"有两家以上"时才显示：只有一家时那个 "1" 是纯噪音。
+  const multi=chain.length>1;
+  const chips=chain.map((pid,i)=>{
+    const p=c.providers.find(x=>x.id===pid)||{id:pid,label:pid};
+    return '<span class="cfgchip'+(i===0?' pri':'')+'">'
+      +(multi?'<i class="ord">'+(i+1)+'</i>':'')
+      +'<span class="nm">'+esc(p.label||pid)+'</span>'
+      +'<em class="cm">'+esc(cfgModelOf(p,s.id)||"—")+'</em>'
+      +'<span class="cb">'
+      +'<button title="往前挪一位（越靠前越优先）" onclick="cfgMove(\''+s.id+'\','+i+',-1)">↑</button>'
+      +'<button title="往后挪一位" onclick="cfgMove(\''+s.id+'\','+i+',1)">↓</button>'
+      +'<button title="这一行不用它" onclick="cfgDrop(\''+s.id+'\','+i+')">✕</button>'
+      +'</span></span>';
+  }).join("")||'<span class="hint">尚未选择，请先在下方 ② 添加模型来源。</span>';
+  // 下拉里只列"这家在这一行有可用模型名、且还没选进来"的 —— 于是"看图那一行选到
+  // 纯文字模型"这种错误在界面上根本没法表达出来（保存时服务端还会再拦一道）。
+  const opts=c.providers.filter(p=>cfgModelOf(p,s.id)&&!chain.includes(p.id))
+    .map(p=>'<option value="'+esc(p.id)+'">'+esc(p.label||p.id)+'</option>').join("");
+  const others=cfgData.slots.filter(x=>x.id!==s.id)
+    .map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join("");
+  return '<div class="cfgslot"><span class="cfgslot-l"><b>'+esc(s.label)+'</b>'
+    +'<span class="hint">'+esc(s.hint||"")+'</span></span>'
+    +'<span class="cfgslot-r">'+chips
+    +'<span class="cfgslot-acts">'
+    +'<select title="为这一行添加一个模型来源" onchange="cfgAddTo(\''+s.id+'\',this.value);this.value=\'\'">'
+    +'<option value="">＋ 添加来源</option>'+opts+'</select>'
+    +'<select title="将本行的顺序复制到另一行" onchange="cfgApplyTo(\''+s.id+'\',this.value);this.value=\'\'">'
+    +'<option value="">复制顺序至</option>'+others+'</select>'
+    +'</span></span></div>';
+}
+
+// 一个「字段名 + 输入框 + 右侧常驻说明」三格。字段名用大白话，占位符只放"例子"。
+// fh 是右侧那句说明 —— 占位符一填就消失，重要的判断依据（"留空 = 和上面一样"）
+// 得用常驻文字托住，否则用户填完就失去线索。没说明也照样输出空 <em> 占位，
+// 保证同一张卡里所有输入框右边缘齐平（见上面 .cfgp-grid 的 ★）。
+function cfgField(id, key, label, value, ph, fh){
+  return '<label for="cfgp-'+id+'-'+key+'">'+esc(label)+'</label>'
+    +'<input id="cfgp-'+id+'-'+key+'" value="'+esc(value||"")+'" placeholder="'+esc(ph)+'">'
+    +'<em class="fh">'+esc(fh||"")+'</em>';
+}
+
+// 这一家的提示语：模板带来的就显示模板说明，自己加的给一句通用指引
+function cfgHintFor(p){
+  const pre=(cfgData.presets||[]).find(x=>x.id===p.id);
+  if(pre&&pre.hint) return pre.hint;
+  if(String(p.id).indexOf("custom-")===0)
+    return "自定义来源：请填写服务商提供的接口地址与模型名，并填入对应密钥。";
+  return "";
+}
+
+// 卡片标题右侧的状态文字：把"密钥从哪来"直接写出来。
+// key_source 的三种值对应 .env / 自己存的 / 还没配 —— 用户最需要知道的就是这个，
+// 否则他分不清框里那串是自己填的还是 .env 里带来的（conventions 坑区记过）。
+function cfgKeyState(p){
+  if(p.key_source==="db")  return "使用自有密钥";
+  if(p.key_source==="env") return "使用系统预置密钥";
+  if(p.has_key)            return "已配置";
+  return "未配置密钥";
+}
+
+function cfgProvRow(p){
+  const id=esc(p.id);
+  const hint=cfgHintFor(p);
+  // 密钥框的内容：用户这次敲过就用他敲的，否则用服务端回给本人的真值
+  // （密码框会把它显示成 ****，点「显示」才明文）。
+  const kVal = (cfgKeys[p.id]!==undefined) ? cfgKeys[p.id] : (p.api_key||"");
+  return '<div class="cfgp">'
+    +'<div class="cfgp-h">'
+    +'<span class="dot '+(p.has_key?"ok":"warn")+'" title="'+esc(cfgKeyState(p))+'"></span>'
+    +'<b>'+esc(p.label||p.id)+'</b>'
+    +(p.builtin?'<span class="tag">内置</span>':'')
+    +'<span class="hint">· '+esc(cfgKeyState(p))+'</span>'
+    +'<span style="flex:1"></span>'
+    +'<button class="ghost mini" title="先保存当前配置，再测试此来源的连通性" onclick="cfgTest(\''+id+'\')">测试连接</button>'
+    +(p.builtin?'':'<button class="ghost mini" title="删除此来源，并同时从 ① 的各行中移除" onclick="cfgDelProv(\''+id+'\')">删除</button>')
+    +'</div>'
+    +'<div class="cfgp-body">'
+    +(hint?'<div class="cfgp-note">'+esc(hint)+'</div>':'')
+    +'<div class="cfgp-grid">'
+    // 字段顺序**跟着上面 ① 的行序**（通用 → 意图识别 → 识图），用户才看得出
+    // "我在这儿填的这个名字，到底喂给 ① 的哪一行"。
+    +cfgField(id,'label','名称',(p.label||""),"便于识别的名称，如「我的智谱」")
+    +cfgField(id,'url','接口地址',(p.base_url||""),"服务商提供的 https:// 地址")
+    +cfgField(id,'text','通用模型',(p.text_model||""),"如 glm-5.3-flash","对话与文本生成")
+    // ★ 占位符不能举别家的模型名（比如在智谱的卡上写 "如 qwen-flash"）—— 用户会照着填错。
+    //   拿不准就写"可留空"这种跟厂商无关的话。
+    +cfgField(id,'route','意图识别模型',(p.route_model||""),"可留空","留空则与「通用模型」一致")
+    +cfgField(id,'vision','识图模型',(p.vision_model||""),"需支持视觉输入","不处理图片时可留空")
+    +'<span class="cfgp-key"><label for="cfgp-'+id+'-key">密钥</label>'
+    +'<input id="cfgp-'+id+'-key" type="password" autocomplete="new-password" value="'+esc(kVal)+'" placeholder="'+esc(cfgKeyPlaceholder(p))+'">'
+    +'<button class="ghost mini" title="显示框中的明文，便于核对" onclick="cfgTogglePw(\''+id+'\',this)">显示</button>'
+    +'<button class="ghost mini" title="清空此输入框（保存后生效）" onclick="cfgKeyClear(\''+id+'\')">清除</button></span>'
+    +'</div><div class="cfgt" id="cfgt-'+id+'"></div></div></div>';
+}
+
+// 把输入框里的值读回 cfgData（结构变动前必调，否则重绘会丢掉用户刚敲的字）
+function cfgCollect(){
+  if(!cfgData) return;
+  (cfgData.config.providers||[]).forEach(p=>{
+    const g=i=>document.getElementById("cfgp-"+p.id+"-"+i);
+    const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),k=g("key");
+    if(l) p.label=l.value.trim();      if(u) p.base_url=u.value.trim();
+    if(t) p.text_model=t.value.trim(); if(v) p.vision_model=v.value.trim();
+    if(r) p.route_model=r.value.trim();
+    if(k) cfgKeys[p.id]=k.value;       // ★ key 也一起收走，否则重绘就丢了
+  });
+}
+
+// 组装提交体 —— key 的三态就在这里落地（见文件头那个 ★ 注释）
+function cfgPayload(){
+  cfgCollect();
+  const c=cfgData.config;
+  return {providers:(c.providers||[]).map(p=>{
+    const o={id:p.id,label:p.label,base_url:p.base_url,text_model:p.text_model,
+             vision_model:p.vision_model,route_model:p.route_model,key_env:p.key_env};
+    // ★ 只有**动过**才提交 api_key：原样不动就不带这个字段（服务端语义 = 不改动）。
+    //   少了这个判断的话，框里预填的 src/.env 密钥会被一次"什么都没改"的保存
+    //   复制进库，"来自 src/.env" 的来源标记就没了（用户再也分不清是抄来的还是自己填的）。
+    //   整段删空 → now="" ≠ orig → 提交空串 = 清掉，回落到 .env。
+    const orig=(p.api_key||"");
+    const now=(cfgKeys[p.id]!==undefined ? cfgKeys[p.id] : orig);
+    if(now!==orig) o.api_key=now;
+    return o;
+  }),slots:c.slots};
+}
+
+function cfgMove(slot,i,d){
+  cfgCollect();
+  const ch=cfgData.config.slots[slot], j=i+d;
+  if(j<0||j>=ch.length) return;
+  const t=ch[i]; ch[i]=ch[j]; ch[j]=t;
+  cfgRender();
+}
+function cfgDrop(slot,i){ cfgCollect(); cfgData.config.slots[slot].splice(i,1); cfgRender(); }
+function cfgAddTo(slot,pid){ if(pid){ cfgCollect(); cfgData.config.slots[slot].push(pid); cfgRender(); } }
+function cfgApplyTo(from,to){
+  if(to){ cfgCollect(); cfgData.config.slots[to]=cfgData.config.slots[from].slice(); cfgRender(); }
+}
+function cfgDelProv(pid){
+  cfgCollect();
+  const c=cfgData.config;
+  c.providers=c.providers.filter(p=>p.id!==pid);                 // 服务端也会级联清链
+  Object.keys(c.slots||{}).forEach(k=>{ c.slots[k]=c.slots[k].filter(x=>x!==pid); });
+  cfgRender();
+}
+// 「＋ 添加模型来源」：按模板加一行**预填好**的（接口地址、模型名都替你抄好了），
+// 用户只剩"粘密钥"这一步 —— 让小白自己去查一家家的接口地址是这个页面最劝退的地方。
+function cfgAddPreset(kind){
+  if(!kind||!cfgData) return;
+  const pre=(cfgData.presets||[]).find(x=>x.id===kind);
+  if(!pre) return;
+  cfgCollect();
+  // "其它"每加一次都得是独立的一家 → 随机后缀；模板家（如 ollama）用固定 id，加过就提示
+  const id=(kind==="custom") ? "custom-"+Math.random().toString(16).slice(2,10) : kind;
+  if(cfgData.config.providers.some(p=>p.id===id)){
+    cfgSay('<span class="cfgWarn">该来源已存在，请在下方列表中查找。</span>', true);
+    return;
+  }
+  cfgData.config.providers.push({id:id,label:pre.label,base_url:pre.base_url,
+    text_model:pre.text_model,vision_model:pre.vision_model,route_model:pre.route_model,
+    key_env:"",api_key:"",builtin:false,has_key:false,
+    key_source:(pre.api_key?"db":"none")});
+  if(pre.api_key) cfgKeys[id]=pre.api_key;       // 本地 Ollama：密钥预填好，它不校验
+  cfgSay('<span class="res ok">已添加「'+esc(pre.label)
+    +'」</span><span class="hint">　填入密钥即可保存；如需启用，请在 ① 中选中它。</span>');
+  cfgRender();
+}
+function cfgKeyClear(pid){
+  cfgKeys[pid]="";                                 // 提交时是空串 = 清掉
+  const el=document.getElementById("cfgp-"+pid+"-key");
+  if(el){ el.value=""; el.type="password";   // 顺手收回明文显示
+          el.placeholder="留空保存后，此来源将不使用密钥"; }
+}
+
+async function cfgSave(silent){
+  if(!cfgData) return false;
+  const r=await fetch("/api/modelconfig",{method:"PUT",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(cfgPayload())});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){
+    cfgSay('<span class="cfgWarn">保存失败：'+esc(d.detail||"服务端返回了错误")+'</span>', true);
+    return false;
+  }
+  cfgData=d; cfgKeys={}; cfgRender();   // 存完清空暂存：密钥框改回显示服务端回的真值
+  if(!silent) cfgSay('<span class="res ok">已保存 · 下次对话生效</span>');
+  return true;
+}
+
+async function cfgTest(pid){
+  // ★ 每次都用 id **现取**元素：cfgSave() 内部会重绘整块，事先抓到的那个节点会被
+  //   换成新的，往它上面写结果等于写进一个已经不在页面上的孤儿元素 —— 用户看到的
+  //   就是"点了按钮毫无反应"。（这个 bug 真的发生过，别再改回先取后用。）
+  const say=html=>{ const el=document.getElementById("cfgt-"+pid); if(el) el.innerHTML=html; };
+  say('<span class="hint">正在测试……</span>');
+  if(!await cfgSave(true)){ say('<span class="res bad">请先修正标记的问题</span>'); return; }
+  say('<span class="hint">正在测试……</span>');
+  let d={};
+  try{
+    const r=await fetch("/api/modelconfig/test",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({provider_id:pid})});
+    d=await r.json().catch(()=>({}));
+  }catch(e){ d={ok:false,hint:"请求未发出，请确认服务是否正在运行"}; }
+  say(d.ok
+    ? '<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>'
+    : '<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>');
+}
+
+async function cfgReset(){
+  cfgData=await (await fetch("/api/modelconfig",{method:"DELETE"})).json();
+  cfgKeys={}; cfgRender();
+  cfgSay('<span class="res ok">已恢复默认配置</span>');
+}
+
+// 注意写成箭头函数：直接 `onclick=cfgSave` 会把点击事件当成第一个参数传进去，
+// 正好命中 cfgSave(silent) —— 于是"手动点保存"变成静默保存，提示语永远不出现。
+$("#cfgAddSel").onchange=function(){ cfgAddPreset(this.value); this.value=""; };
+$("#cfgSaveBtn").onclick=()=>cfgSave();
+$("#cfgReset").onclick=cfgReset;
+
+$("#btnNew").onclick=()=>newChat();
+$("#btnNewSide").onclick=()=>newChat();
+$("#btnSend").onclick=()=>{ const v=$("#inp").value.trim(); if(!v)return; $("#inp").value=""; send(v); };
+$("#inp").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#btnSend").click(); } });
+
+// 启动统一走 boot()（见文件顶部：/api/auth/me → 主对话 + 左侧历史），
+// 未登录时由登录视图接管，登录成功后 boot(true)。
+</script>
+</body>
+</html>

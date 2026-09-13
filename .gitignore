@@ -1,0 +1,57 @@
+# ── 敏感信息 ──
+archive_tool/.env
+.env
+
+# ── 打包产物（PyInstaller build/dist）──
+archive_tool/build/
+archive_tool/dist/
+archive_tool/__pycache__/
+archive_tool/core/__pycache__/
+__pycache__/
+*.pyc
+
+# ── 根目录大体积测试图片（约300MB）──
+*.jpg
+*.png
+
+# ── IDE ──
+.idea/
+
+# ── 运行时输出 ──
+archive_tool/projects/
+
+# ── Web 服务运行时数据（不提交） ──
+server/data/
+
+# ── 部署/打包产物（不提交） ──
+*.tar.gz
+archive_tool/dist_win7/
+archive_tool/python-3.8.10-amd64.exe
+archive_tool/test_photos.zip
+下载_*/
+.playwright-mcp/
+
+# ── 证书/密钥（本地生成） ──
+server/key.pem
+server/cert.pem
+
+# ── 运行时/样例/密钥 ──
+data/
+samples/
+src/.env
+.pytest_cache/
+
+# ── Python 构建/测试产物（开源通用） ──
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+.tox/
+.venv/
+
+# ── AI 工具本地状态（各人机器不一样，不入库）──
+# settings.local.json 会被 harness 自动追加权限白名单，提交它等于把每台机器的
+# 临时授权、绝对路径都带上；.agents/ 是 project-hub 维护技能的本地安装副本。
+.claude/settings.local.json
+.agents/

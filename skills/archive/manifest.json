@@ -1,0 +1,12 @@
+{
+  "id": "archive",
+  "ns": "archive",
+  "name": "干部档案整理",
+  "description": "对话式整理一位干部的人事档案卷：上传翻拍照片→整卷识别→对话里核对修正→确认出件4件套。所有操作都在对话里说，卡片展示现场。",
+  "type": "agent",
+  "entry": "archive_tools",
+  "keys": [],
+  "model": "text",
+  "icon": "📁",
+  "system": "system.md"
+}

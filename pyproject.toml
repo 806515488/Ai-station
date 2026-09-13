@@ -1,0 +1,52 @@
+[project]
+name = "station-ai"
+version = "0.3.0"
+description = "个人 AI 工作站（宿主 + skills）：通用 agent 运行时 + 技能注册表 + 异步任务 + 文件/预览 + 单用户 Web。内建技能：档案整理(archive, LangGraph pipeline) / 写周报(agent)。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    # —— Web / API ——
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "pydantic>=2",
+    # —— 模型接入（langchain 仅作三家 OpenAI 兼容端点的传输层；harness 是宿主的）——
+    "langchain>=1",
+    "langgraph>=1",
+    "langchain-openai>=1",
+    # —— 图像 / 4件套导出（archive skill）——
+    "pillow>=9",
+    # img2pdf：原件 PDF 的**主路径**（JPEG 原样嵌入、零重压缩），不是可选加速。
+    # 缺它就只能走 PIL 兜底，而兜底那次把全卷一次性解码 —— 实测 120 页峰值
+    # 1411MB vs 552MB（09-13）。1.9G 小机器上这就是"出得来"和"被 OOM 杀掉"的差别。
+    "img2pdf>=0.5",
+    "openpyxl>=3",
+    "reportlab>=3.6",
+    "pypdf>=3",
+    "requests>=2.25",
+]
+
+[project.optional-dependencies]
+docx = ["python-docx>=1.1"]        # weekly-report 的 export_docx
+mcp = ["mcp>=1.0"]                 # 预留：MCP 工具互操作（P4+）
+dev = ["pytest>=8", "httpx>=0.27"] # 跑离线测试
+
+[project.scripts]
+station-web = "station.app.server:main"   # 一键起站：pip install -e .[dev]; station-web
+archive-cli = "archive.engine.run:main"   # archive 引擎 CLI（无 Web，调试用）
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["station*", "archive*"]
+
+[tool.setuptools.package-data]
+"station" = ["app/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
