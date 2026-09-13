@@ -74,7 +74,7 @@ def _pdf_from_sections(sections: list[tuple[str, list[str]]],
         canvas.setFont(font_name, 9)
         canvas.setFillColor("#888888")
         canvas.drawCentredString(A4[0] / 2, 12 * mm,
-                                 "© station")                      # 画在页面底部中央
+                                 "© lisen")          # 画在页面底部中央
         canvas.restoreState()                   # 恢复，不影响正文
 
     # ⑤ 建“文档模板”，把章节拼成 story（一个接一个的流式元素），最后 build 出 PDF

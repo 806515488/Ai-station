@@ -132,7 +132,7 @@ def export_pdf(records: list[dict], materials: list[dict], person: str,
         writer.add_metadata({               # 文件属性：标题/作者（浏览器里能看）
             "/Title": f"{person}-档案原件",
             "/Author": "lisen",
-            "/Creator": "station · 干部人事档案数字化整理",
+            "/Creator": "干部人事档案数字化整理台 · © lisen",
         })
         for main_title, children in outlines:      # 逐大类加书签
             if not children:
