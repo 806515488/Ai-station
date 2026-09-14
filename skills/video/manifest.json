@@ -1,0 +1,13 @@
+{
+  "id": "video",
+  "ns": "video",
+  "name": "AI 视频生成",
+  "description": "按一句话描述生成一条 4–12 秒的短视频（720P）：先用通用模型把描述补成完整画面给你过目，你点头后后台生成，进度实时显示，成片在对话里能直接播放和下载。",
+  "type": "agent",
+  "entry": "video_tools",
+  "keys": [],
+  "model": "text",
+  "heavy": false,
+  "icon": "🎬",
+  "system": "system.md"
+}

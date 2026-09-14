@@ -53,6 +53,7 @@ def l1_route(text: str, skill_ids: set[str]) -> RouteHit | None:
         return None
     has_archive = "archive" in skill_ids
     has_weekly = "weekly-report" in skill_ids
+    has_video = "video" in skill_ids
 
     if (has_archive and any(k in t for k in
             ("干部档案", "档案整理", "整理档案", "翻拍照片", "上传照片", "选照片",
@@ -72,6 +73,12 @@ def l1_route(text: str, skill_ids: set[str]) -> RouteHit | None:
 
     if has_weekly and ("周报" in t or "本周总结" in t or "写总结" in t):
         return RouteHit(skill_id="weekly-report")
+
+    # 视频排在最后：档案/周报的正则更具体，别被"视频"这种宽词先接走。
+    # ★「视频」这两个字必须收 —— 草稿卡上的按钮预填的就是"…生成视频吧"，
+    #   按钮也是一条路由输入（跟 09-13 学习卡那次同一条教训）。
+    if has_video and any(k in t for k in ("视频", "短片", "动画")):
+        return RouteHit(skill_id="video")
     return None
 
 

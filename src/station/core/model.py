@@ -74,7 +74,20 @@ def _to_llm(msgs: list[dict]) -> list[dict]:
             out.append({"role": "assistant", "content": m.get("content", ""),
                         "tool_calls": calls})
         else:
-            item = {"role": role, "content": str(m.get("content", ""))}
+            # ★ 多模态消息：content 是**结构块列表**时才原样透传，例如
+            #     [{"type":"text","text":"这是什么"},{"type":"image_url","image_url":{...}}]
+            #   一拍平（str()）图片块就变成一串 Python repr，模型收到的是一堆文本、
+            #   图彻底丢失 —— 而报出来的是模型的 400，很难查（09-14 加人像提取时才补上）。
+            # ★ 只在 `isinstance(c, list)` 时透传：纯文本调用方传的仍是 str，走下面那支，
+            #   行为一字不变。全仓 respond/stream 的调用方（compact/router/agent/降级回退）
+            #   传的都是 str，所以这条分支对它们是**不可达**的，零影响。
+            # ★ 别顺手把 None→"None" 改成空串 —— 那是另一件事的行为变更，别混进来。
+            # ★★ 告诫：图片块现在能穿过这里了，但**绝不要把 base64 图片写进 Thread 历史**
+            #    —— 历史落 SQLite 且每轮重发，几 MB 的 base64 会让会话表和 token 一起炸。
+            #    图片只该走"一次性调用"，不进对话历史。
+            c = m.get("content", "")
+            item = {"role": role,
+                    "content": c if isinstance(c, list) else str(c)}
             # 工具执行结果消息：必须带 tool_call_id + 名字，模型才知道结果属于哪次调用
             if role == "tool":
                 tid = m.get("tool_call_id") or m.get("id")
@@ -95,8 +108,18 @@ def _from_resp(resp) -> dict:
     这里转成纯 dict，方便存盘(json)。
     """
     content = resp.content
-    if not isinstance(content, str):      # 多模态内容可能是 list，只留字符串部分
-        content = ""
+    if not isinstance(content, str):
+        # ★ 多模态响应的 content 也可能是**结构块列表**（如 [{"type":"text","text":"…"}]）。
+        #   原来这里直接置空 —— 于是"让识图模型看一眼图、回一段文字"的调用会**静默拿到
+        #   空字符串**：上层看到的是"模型没给出结果"，而根因在读响应，极难查
+        #   （09-14 加人像提取时暴露：提取结果变成空串，用户看到的是"优化失败"）。
+        #   只抽 type=="text" 的块拼起来；别的块（图片等）忽略。
+        if isinstance(content, list):
+            content = "".join(
+                str(b.get("text") or "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            content = ""
 
     def _tc(tc, key: str, default=""):
         """兼容两种形态：新版 LangChain 里 tool_call 是 dict（TypedDict）。"""

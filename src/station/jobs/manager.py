@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import contextlib           # nullcontext()：什么都不做的 with ——"不领牌子"那一支用它
 import threading            # 线程 + Lock（≈ Java 的 Thread / synchronized）
 import time
 import traceback            # 拿完整异常堆栈（排查失败原因用）
@@ -134,16 +135,32 @@ class JobManager:
                       auto_approve=config.AUTO_APPROVE,
                       user_id=job.user_id or "",
                       job_id=job.id)
+        # ★ 这条技能吃不吃内存（manifest 的 heavy 字段，见 skills/manifest.py 的说明）。
+        #   **必须用 getattr 而不是 skill.heavy**：测试里的假技能（tests/test_heavy.py 的
+        #   _Skill/_Slow）是裸类，根本没有这个属性，直接取会 AttributeError；而取不到时
+        #   必须按"吃内存"处理 —— 否则那些"同时只跑一件"的用例会静默失去意义。
+        heavy_job = getattr(skill, "heavy", True)
+        # 闸里显示的名字：用技能自己的名字（用户看得懂），没有才回落到技能 id。
+        skill_name = getattr(skill, "name", "") or job.skill_id
         try:
-            # 排队时先把实话说给用户看（前端进度面板显示的就是这个 message），别让他
-            # 以为任务卡死了 —— 小内存机器上"串行跑"是常态，不是故障。
-            waiting = heavy.busy_with()
-            job.update(status="running",
-                       message=f"排队等「{waiting}」跑完" if waiting else "start")
-            # ★ 重活闸：整条链（识别 + 出件）都在牌子里面。领不到就一直等（wait=None）
-            #   —— 后台任务排队天经地义。**位置必须在最外层**，别挪进 export_pdf 那种
-            #   里层函数：同一线程拿两次同一把锁 = 自己等自己死锁。原因见 core/heavy.py。
-            with heavy.heavy_slot(f"档案任务 {job.id}", wait=None):
+            if heavy_job:
+                # 排队时先把实话说给用户看（前端进度面板显示的就是这个 message），别让他
+                # 以为任务卡死了 —— 小内存机器上"串行跑"是常态，不是故障。
+                waiting = heavy.busy_with()
+                job.update(status="running",
+                           message=f"排队等「{waiting}」跑完" if waiting else "start")
+                # ★ 重活闸：整条链（识别 + 出件）都在牌子里面。领不到就一直等（wait=None）
+                #   —— 后台任务排队天经地义。**位置必须在最外层**，别挪进 export_pdf 那种
+                #   里层函数：同一线程拿两次同一把锁 = 自己等自己死锁。原因见 core/heavy.py。
+                gate = heavy.heavy_slot(f"{skill_name} {job.id}", wait=None)
+            else:
+                # 网络等待型长活（如 skills/video：几分钟里只在等对端，本地峰值就是最后
+                # 下载的那几 MB）。它进闸只会把档案识别/导出堵住几分钟，收益为负。
+                # ★ 这一支**也不能说"排队"** —— 它确实没在排队，说排队就是撒谎；
+                #   而前端进度面板显示的就是这个 message。
+                job.update(status="running", message="start")
+                gate = contextlib.nullcontext()   # 空闸：with 里什么都不做
+            with gate:
                 # build_runner(ctx, **job.args) 返回生成器；**展开把 args dict 变关键字参数
                 gen = skill.build_runner(ctx, **job.args)
                 if gen is None:                 # 防御：技能没给生成器

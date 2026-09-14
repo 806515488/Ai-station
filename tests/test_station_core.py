@@ -79,7 +79,7 @@ def test_registry_loads_skills():
     reg = get_registry()
     ids = {s.id for s in reg.list()}
     assert {"demo-agent", "demo-pipe", "archive",
-            "weekly-report"} <= ids                # 4 个技能都在（archive 已合并为一个）
+            "weekly-report", "video"} <= ids       # 各技能都在（archive 已合并为一个）
     demo = reg.get("demo-agent")
     assert demo is not None and demo.type == "agent"          # 是 agent 型
     assert {t.name for t in demo.tools} >= {"demo.now", "demo.echo"}  # 工具被命名空间化
@@ -87,6 +87,75 @@ def test_registry_loads_skills():
     assert arc.type == "agent" and arc.tools                 # 档案技能 = agent + 一套工具
     assert "archive.export" in {t.name for t in arc.tools}   # 出件工具在（risk=approve）
     assert arc.system                                        # 系统提示词（system.md）被读进
+
+
+def test_video_skill_is_routable_with_its_own_hints():
+    """★ 视频技能要进路由目录，且 hints **不能回落成 description**。
+
+    hints 在服务端是**硬编码**的（unified._routing_hints 里按 skill.id 分支），
+    **不在 manifest 里** —— 漏加那个分支不会报错也不会崩，只是 hints 悄悄变成
+    description，路由命中率下降（用户说了"生成视频"却掉进通用聊天）。
+    """
+    from station.app.unified import build_skill_catalog
+
+    cat = {c.id: c for c in build_skill_catalog()}
+    assert "video" in cat, "agent 型 + 有工具的技能必须进路由目录，否则永远落不到它"
+    ref = cat["video"]
+    assert ref.hints and ref.hints != ref.description, \
+        "hints 回落成 description 了 —— _routing_hints 里漏了 video 分支？"
+    assert "视频" in ref.hints
+
+
+def test_l1_routes_video_phrases():
+    """L1 关键词兜底：说了「视频」就该落到 video。
+
+    ★ 用例里刻意带上**草稿卡按钮预填的那两句** —— 按钮也是一条路由输入。
+    这两句要是不被 L1 认，用户点「就这个，生成」会掉进通用聊天（那边没有 video.make），
+    表现是"点了没反应"。09-13 学习卡就是这么踩的。
+    """
+    from station.core.router import l1_route
+    ids = {"archive", "weekly-report", "video"}
+    for t in ("生成视频", "做个视频", "来一段视频",
+              "就用这版提示词生成视频吧", "换个风格的视频提示词",
+              "刚才那条视频好了吗"):
+        hit = l1_route(t, ids)
+        assert hit and hit.skill_id == "video", f"这句没归到 video：{t}"
+    # 技能没挂时不许命中它（防"没装却路由过去"）
+    assert l1_route("生成视频", {"archive"}) is None
+    # 档案/周报的话术仍然优先归它们（视频排在三者最后，别把别人的话接走）
+    assert l1_route("看全景", ids).skill_id == "archive"
+    assert l1_route("帮我写周报", ids).skill_id == "weekly-report"
+
+
+def test_index_html_knows_video_card_and_slot():
+    """粗粒度源码护栏：前端忘了接视频这套东西时，症状是**静默降级**（卡片显示
+    "未知卡片类型"、进度面板写着"识别完成"），不报错不崩 —— 只能扫源码钉住。
+
+    （风格照 tests/test_users_db.py 的 test_every_db_accessor_holds_the_lock。）
+    """
+    html = (config.REPO / "src/station/app/static/index.html").read_text(encoding="utf-8")
+    assert '"video-card"' in html, "RENDERERS 里没有 video-card，成片发不出来"
+    assert '"prompt-card"' in html, "RENDERERS 里没有 prompt-card，草稿卡显示不出来"
+    assert "video_model" in html, "配置页没认 video_model（CFG_ROLE/收集/提交三处之一）"
+    assert "JOB_WORDS" in html, "进度面板文案表不在 —— 视频任务会显示成「识别中」"
+    # ★ 09-14 用户实测报的"失败时没有进度条"：任务可能在两次轮询之间就跑完（建任务被
+    #   503 挡回来时整个任务只活一两秒），守卫 `if(!jobGoing) return` 会让面板**从不出现**。
+    #   这三样是那个修复的骨头，删掉任一条都会退回到"失败在界面上什么都没有"。
+    assert "_jobShown" in html, "少了「已画过面板」的守卫（会重复画面板或干脆不画）"
+    assert "jobFailReason" in html, "失败原因没被取出来（只会显示一句「详情见任务日志」）"
+    assert "showEnded" in html, "收尾态不再画面板 —— 快速失败又会变回静默"
+
+
+def test_index_html_knows_portrait_upload():
+    """前端粗护栏：人像上传那套（卡片分支 / 动作函数 / 草稿卡上的缩略图）漏一个，
+    症状都是**静默**的 —— 卡片不出现、点了没反应、照片不显示，不报错不崩。
+    """
+    html = (config.REPO / "src/station/app/static/index.html").read_text(encoding="utf-8")
+    assert 'purpose==="portrait"' in html, "upload-card 没有 portrait 分支"
+    for fn in ("ptOpen", "ptPick", "ptGo"):
+        assert fn in html, f"缺动作函数 {fn}（卡片会是个死框）"
+    assert "/api/portrait" in html, "没打到上传端点"
+    assert "c.photos" in html, "草稿卡没有渲染人像缩略图"
 
 
 def test_skill_can_carry_both_tools_and_runner():

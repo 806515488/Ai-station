@@ -45,20 +45,38 @@ SLOT_LABELS = {
     "chat":   "通用模型",
     "route":  "意图识别小模型",
     "vision": "识图模型",
+    # ★ 09-14 加的第四类。它和上面三个**不是同一类能力**：视频是"生成"，
+    #   上面三个是"理解/对话"。但挂法完全一样 —— 一家服务商在这个槽位有没有
+    #   对应能力的模型名（video_model），决定它能不能被选进这一行。
+    #   和当初加"识图模型"是同一个形状：agnes 就是"只有视频这一个能力"的家。
+    "video":  "视频生成模型",
 }
 SLOT_HINTS = {
     "chat":   "用于日常对话与文本生成，建议选用能力最强的模型。",
     "route":  "判断请求应路由到哪个功能，建议选用响应快、成本低的模型。",
     "vision": "用于图片内容识别，必须支持视觉输入，纯文本模型不可用。",
+    "video":  "用于按文字描述生成短视频，必须是视频生成模型，不是对话模型。",
 }
 
 # 每个槽位该取 provider 的哪个模型名角色。
 _ROLE_KEY = {"chat": "text_model", "route": "route_model",
-             "vision": "vision_model"}
+             "vision": "vision_model", "video": "video_model"}
 
-# 内置三家。`key_env` 是"去哪个环境变量找 key"（即 src/.env 里那几行）。
+# 「测试连接」对**这些槽位**没有意义：它们不是对话模型，打 /chat/completions 必然 400，
+# 而那**不是"连不上"、是探法不对** —— 把它显示成红叉会让用户去改一个本来正确的模型名。
+# 端点看到命中的是这类槽位就跳过试连，回一句中性提示。见 app/server.py 的测试端点。
+PROBE_NOT_CHAT = {
+    "video": "视频模型不走对话接口，没法用「测试连接」试。保存后直接生成一条试试。",
+}
+
+# 内置服务商。`key_env` 是"去哪个环境变量找 key"（即 src/.env 里那几行）。
 # 注意：这里就是那份漂移了两处的表的合并结果，口径是"取 station 侧的值"——
 # 因为 Web 真在跑的是它；archive 的 CLI 走自己那张 PROVIDERS 表，不受影响。
+#
+# ★ 前四家（glm/deepseek/qwen/agnes）里，只有**后一家是"只有视频能力"的**：
+#   它的 text_model / vision_model / route_model 全是空的 —— 这不是漏填，是事实
+#   （Agnes 目前只提供文本/图像/视频三类的生成接口，没有对话模型）。
+#   于是它只可能被选进「视频生成模型」那一行，别的行选它会在保存时被 _validate 拦下。
 BUILTIN_PROVIDERS = [
     {"id": "glm", "label": "智谱 GLM",
      "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -75,6 +93,14 @@ BUILTIN_PROVIDERS = [
      # ★ 这个字段就是"干掉 qwen-flash 伪通道"的地方——以前它是一个独立的 provider
      #   条目，正是两份表漂移的源头；现在它只是 qwen 这个 provider 的一个角色模型名。
      "route_model": "qwen-flash", "key_env": "QWEN_API_KEY"},
+    # Agnes AI：目前只服务「视频生成模型」这一个槽位（见上面的说明）。
+    # ★ 国内访问要用 https://apihub.agnes-ai.cn/v1，而 **密钥与节点是绑的** ——
+    #   .cn 的 key 打 .com 会 401，反之亦然（官方文档明说）。这里给的是国际站。
+    {"id": "agnes", "label": "Agnes AI",
+     "base_url": "https://apihub.agnes-ai.com/v1",
+     "text_model": "", "vision_model": "", "route_model": "",
+     # 限时免费档；用户想换标准版/别家，直接在界面里改这一格即可。
+     "video_model": "agnes-video-2.5-flash", "key_env": "AGNES_API_KEY"},
 ]
 
 # 老写法 → 新 id 的别名。**这条不能删**：.env.example 里写着 ROUTE_CHANNEL=qwen-flash，
@@ -173,7 +199,9 @@ def chain_label(entries: list) -> str:
 
 def _default_slots(providers: list) -> dict:
     """零配置时的四条链：**链首都读 env**，所以 .env 里的
-    TEXT_CHANNEL / VISION_CHANNEL / STATION_*_CHANNEL / ROUTE_CHANNEL 依然生效。
+    TEXT_CHANNEL / VISION_CHANNEL / VIDEO_CHANNEL / STATION_*_CHANNEL / ROUTE_CHANNEL
+    依然生效。（"四条"在 09-11~09-14 之间其实只有三条 —— 那会儿 text 槽被合并进了
+    chat；09-14 补的 video 是真正的第四条。）
 
     这就是"没配置 = 行为和以前一模一样"的保证：链首等于今天代码里写死的那个通道。
     """
@@ -189,6 +217,9 @@ def _default_slots(providers: list) -> dict:
         "chat":   [_safe(config.channel_for("text"), "glm")],
         "route":  [_safe(_env("ROUTE_CHANNEL") or config.ROUTE_CHANNEL, "qwen")],
         "vision": [_safe(config.channel_for("vision"), "qwen")],
+        # 视频这一行的默认链首来自 DEFAULT_CHANNEL["video"]（= agnes），
+        # 可以用 VIDEO_CHANNEL 环境变量覆盖。链首那家要是被用户删了就回落 agnes。
+        "video":  [_safe(config.channel_for("video"), "agnes")],
     }
 
 
@@ -359,9 +390,15 @@ def _validate(cfg: dict) -> list[str]:
             problems.append(f"{_name(p)} 未填写名称")
         if not _scheme_ok(p.get("base_url")):
             problems.append(f"{_name(p)} 的「接口地址」需以 http:// 或 https:// 开头")
-        if not str(p.get("text_model") or "").strip():
-            problems.append(f"{_name(p)} 未填写「通用模型」")
+        # ★ 09-14 从这里删掉了"必须填 text_model（通用模型）"那条检查，挪到下面的
+        #   槽位循环里按**槽位**查。原来它在 provider 级，于是：
+        #     · 只服务视频那一行的家（agnes 没有对话模型）会被要求填「通用模型」；
+        #     · 只填了 route_model 的专用小模型也会被误拦。
+        #   而它本来想防的"某一行里的家缺那一行要的模型名"，只有 vision 做了（下面）。
 
+    # ── 模型名检查：按**槽位**来（这才是它本来的语义）──
+    # 凡是被某条链用上的家，必须提供**那条链**需要的模型名；否则 _entry() 返回 None、
+    # resolve() 把它静默丢掉，用户看到的现象是"某一行莫名其妙空着"或"降级到别家"。
     for slot, label in SLOT_LABELS.items():
         chain = (cfg.get("slots") or {}).get(slot) or []
         if not isinstance(chain, list):
@@ -372,12 +409,12 @@ def _validate(cfg: dict) -> list[str]:
         for pid in chain:
             if pid not in by_id:
                 problems.append(f"「{label}」中包含已不存在的来源：{pid}")
-            elif slot == "vision" and not str(
-                    by_id[pid].get("vision_model") or "").strip():
-                # 看图那一行里放纯文字模型 = 识别时整卷报 400，用户根本猜不到原因。
-                # 在保存这关就拦住，别让它变成运行时的天书报错。
-                problems.append(
-                    f"{_name(by_id[pid])} 未填写「识图模型」，不能用于「{label}」")
+            elif not _model_for(by_id[pid], slot):
+                # 这一行为什么需要它、它就缺什么 —— 直接点名，用户才知道去哪一格填。
+                # 例：看图行放了纯文字模型 → 识别时整卷报 400；视频行放了对话模型 →
+                # 建任务时 400。都在保存这关拦住，别变成运行时的天书报错。
+                # ★ 文案用界面上的行名（SLOT_LABELS），和用户眼睛看到的字对得上。
+                problems.append(f"{_name(by_id[pid])} 未填写「{label}」")
     return problems
 
 
@@ -399,8 +436,10 @@ def save_config(user_id: str, incoming: dict) -> dict:
     # 不筛的话会一路存进库里，越积越脏。
     # ★ 注意用 `if k in p` 而不是补空串：**字段"缺失"和"空串"含义不同**（见下面
     #   api_key 的三态）。补成空串会把"不改动"误判成"清空"（这条踩过）。
+    # ★ 加一个新的模型名字段时**必须**同步加进这个元组，否则它会被静默丢掉
+    #   （用户填了、保存也不报错，就是下次打开发现空了）。
     _KEEP = ("id", "label", "base_url", "text_model", "vision_model",
-             "route_model", "key_env", "api_key")
+             "route_model", "video_model", "key_env", "api_key")
     cfg["providers"] = [{k: p[k] for k in _KEEP if k in p}
                         for p in (cfg.get("providers") or []) if isinstance(p, dict)]
 
@@ -545,24 +584,31 @@ def presets() -> list[dict]:
 
 
 def probe_entry(user_id: str, provider_id: str,
-                slot: str = "") -> tuple[str, str, str]:
-    """给「试一下能不能用」端点用：从**已保存的**配置里取 (base_url, api_key, model)。
+                slot: str = "") -> tuple[str, str, str, str]:
+    """给「试一下能不能用」端点用：从**已保存的**配置里取 (base_url, api_key, model, slot)。
 
     刻意只认已保存的 provider id、**不接受裸 URL** —— 这样"测试"这个动作对外能到达
     的范围就被收敛成"你自己配置里的那几个地址"，没法被拿来探测任意内网服务。
 
-    slot 留空 = 自动挑一个这家有的模型名（文字优先，其次看图）—— 界面上是按
+    slot 留空 = 自动挑一个这家有的模型名（对话优先，最后才轮到视频）—— 界面上是按
     "这一家"测的，用户不该被要求先理解槽位。
+
+    ★ 09-14 起**多回一个"命中的是哪个槽位"**：调用方靠它判断"这个模型能不能用对话
+      接口试连"（视频模型不能，见 PROBE_NOT_CHAT）。返回值从 3 元组变 4 元组，
+      全仓只有 app/server.py 的测试端点一处解包（没有测试引用过它）。
     """
     cfg = load_config(user_id)
     p = _by_id(cfg, provider_id)
     if p is None:
         raise ValueError("未找到该模型来源，请先保存配置")
-    order = ([slot] if slot else []) + ["chat", "vision", "route"]
+    # video 排最后：内置那几家、以及用户自己加的家都是先命中 chat，行为一字不变；
+    # 只有"除了视频模型名什么都没有"的家（agnes）才会落到 video。
+    order = ([slot] if slot else []) + ["chat", "vision", "route", "video"]
     for s in order:
         m = _model_for(p, s)
         if m:
             # 非站长在这里同样拿不到 .env 的 key —— 于是"测试连接"测的就是他真正
             # 会用的那把；否则会出现"测试通过、一说话就报缺 key"的假绿灯。
-            return (p.get("base_url") or "").strip(), _api_key(p, db.is_owner(user_id)), m
+            return ((p.get("base_url") or "").strip(),
+                    _api_key(p, db.is_owner(user_id)), m, s)
     raise ValueError("该来源尚未填写模型名，请填写后重试")

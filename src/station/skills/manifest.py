@@ -6,7 +6,7 @@ manifest 用 JSON（stdlib 零依赖，便于开源/自部署；结构刻意与 
 文件：<repo>/skills/<id>/manifest.json
 字段：id, ns(工具命名空间，默认=id), name, description, type(agent|pipeline|tools),
       entry(python import，如 station.demo_agent), keys(需要的 env key 白名单),
-      model(text|vision), icon(可选), builtin(可选，预留),
+      model(text|vision), heavy(可选，默认 true，见下), icon(可选), builtin(可选，预留),
       args(可选，pipeline 参数表单描述，有序数组), args_one_of(可选，"至少填一"组)
 args 数组每项：{name(=build_runner 形参名), label(表单标签),
               type(text|int|choice|upload),   # upload=客户端选照片上传→服务器目录
@@ -41,6 +41,14 @@ class Skill:
     entry: str = ""         # 代码入口，如 station.demo_agent / weekly_report
     keys: list[str] = field(default_factory=list)   # 需要的 env key 白名单（权限）
     model: str = "text"     # 默认用 text 通道还是 vision
+    # ★ 这条技能的后台 job **会不会吃内存**（决定它要不要领 core/heavy.py 的"重活闸"）。
+    #   默认 True = 受闸保护：全站同时只跑一件，防小内存机器被内核 OOM 杀掉。
+    #   只有**纯网络等待型**长活才该写 false（如 skills/video：几分钟里几乎不吃本地内存，
+    #   峰值就是最后下载的那几 MB 视频；让它占着闸会把档案识别/导出堵死几分钟）。
+    #   ⚠️ **误用后果没有任何症状**：给一个真吃内存的技能标成 false，等于把 OOM 那道闸
+    #   亲手拆掉 —— 不报错、不崩日志，只在某个大卷上和别的活撞上时被内核杀掉。
+    #   拿不准就**别写这一行**（默认就是护着你的）。
+    heavy: bool = True
     icon: str = ""
     group: str = ""         # 分组名（可选）：前端把同组技能叠成一张卡（如"干部档案"=整理+核对）
     builtin: list[str] = field(default_factory=list)

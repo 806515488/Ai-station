@@ -112,6 +112,19 @@
              background:#24314a;color:var(--acc);letter-spacing:0}
   .fcard .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fcard .act{flex:none;color:var(--dim);font-size:11px}
+  /* 生成的视频：内嵌播放。宽度跟着卡片走，上限 420px（再宽在对话流里就喧宾夺主了） */
+  .vcard{display:block;width:100%;max-width:420px;border-radius:8px;background:#000;margin-top:2px}
+  /* 提示词草稿：用等宽一点的块显得"这是要拿去用的文本"，跟正文消息区分开 */
+  .pcard{padding:8px 10px;border:1px solid var(--line);border-radius:7px;
+         background:var(--panel);line-height:1.6;margin:2px 0 6px}
+  /* 草稿卡上的人像缩略图：角标数字就是提示词里 <Picture N> 的编号，用户能对得上 */
+  .prow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 6px}
+  .pwrap{position:relative;display:inline-block}
+  .pthumb{width:56px;height:56px;object-fit:cover;border-radius:6px;
+          border:1px solid var(--line);display:block}
+  .pnum{position:absolute;right:-4px;bottom:-4px;width:16px;height:16px;line-height:16px;
+        text-align:center;font-size:10px;font-style:normal;border-radius:8px;
+        background:var(--acc);color:#fff}
   .catrow{margin:6px 0}
   .catrow .ch{color:var(--acc);cursor:pointer;font-size:12px;user-select:none}
   .catrow .items{margin:4px 0 0 10px}
@@ -443,6 +456,11 @@
 const $=s=>document.querySelector(s);
 let threadId=null, me=null;
 let _jobWatchers={}, _prodGroups=[];   // job进度观察 / 产物组缓存
+// _jobShown：**已经画过进度面板**的 job（只增不删）。
+// 与 _jobWatchers 分开是因为生命周期不同：_jobWatchers 在轮询结束时会被删掉（那是
+// "还在不在轮询"），而"这块面板画过没有"必须一直记着 —— 混用的话，任务一结束守卫就
+// 失效，同一块面板会在下一个回合结束时又冒出来一块。
+let _jobShown={};
 
 // ══ 登录/启动（刷新不再失忆：cookie 有 uid → /api/auth/me → 恢复上次位置）══
 let authMode="login";                        // login | register（登录框两种形态）
@@ -820,7 +838,8 @@ async function syncThreadJob(){
   if(!threadId) return;
   try{
     const sd=await (await fetch(`/api/sessions/${threadId}`)).json();
-    watchThreadJob(sd);
+    // showEnded：这里是"一个对话回合刚结束"，刚刚发生的事（哪怕是失败）必须让用户看见
+    watchThreadJob(sd, true);
   }catch(e){ /* 会话可能刚切走 */ }
 }
 
@@ -1028,6 +1047,42 @@ const RENDERERS={
   // 文件卡片：产物下载（4件套 / 周报 / 任意文件引用）
   "file-card":c=>`<div class="caph">📎 <b>产物文件</b>${c.note?` <span>${esc(c.note)}</span>`:""}</div>
     <div class="fcard">${(c.files||[]).map(f=>fileRow(f)).join("")||'<span class="hint">（无）</span>'}</div>`,
+  // 视频卡片：生成好的 mp4 直接内嵌播放（原生控件自带全屏）+ 下载。
+  // ★ 这张卡**没有任何事件绑定** —— 播放/暂停/全屏全在 <video> 原生控件里，
+  //   于是"同一张卡会重复出现、绝不能靠全局 id 绑事件"那条铁律对它天然免疫
+  //   （对比 upload-card 那段注释里记的踩坑）。
+  // ★ src 用 /api/files/<id>，**不带** ?dl=1 —— dl=1 会让浏览器带上下载头、
+  //   直接存盘而不播放。FileResponse 支持 Range 请求，所以进度条能拖。
+  "video-card":c=>`<div class="caph">🎬 <b>生成的视频</b>${
+      c.prompt?` <span class="hint">${esc(c.prompt)}</span>`:""}</div>
+    ${(c.files||[]).map(f=>{
+      const u="/api/files/"+encodeURIComponent(f.id);
+      return `<video class="vcard" controls preload="metadata" playsinline src="${esc(u)}"></video>
+      <div class="row" style="margin:6px 0 0">
+        <a class="mini" style="text-decoration:none" href="${esc(u)}?dl=1"
+           download="${esc(f.name||"video.mp4")}">下载 mp4</a>
+        <span class="hint">${esc(f.name||"")}</span></div>`;}).join("")
+      ||'<span class="hint">（暂时拿不到视频文件）</span>'}`,
+  // 提示词草稿卡：**先给用户看过目，点头了才真去生成**（两步制，见 skills/video）。
+  // ★ 按钮里的话术**必须带「视频」两个字** —— 按钮也是一条路由输入，L1 靠它把这句话
+  //   归回 video 技能（见 core/router.py 的 video 关键词 + unified._routing_hints 的锚点，
+  //   两处都要有）。不带的话点下去会掉进通用聊天，那边没有 video.make，点了没反应
+  //   —— 09-13 学习卡上的「确认，写进去」按钮就是这么踩的。
+  "prompt-card":c=>`<div class="caph">✎ <b>提示词草稿</b>
+      <span class="hint">${esc(c.seconds||5)} 秒 · ${esc(c.aspect_ratio||"16:9")} · ${esc(c.size||"720P")}</span></div>
+    <div class="pcard">${esc(c.prompt||"")}</div>
+    ${(c.photos||[]).length?`<div class="prow">${c.photos.map((p,i)=>
+      `<span class="pwrap"><img class="pthumb" src="/api/files/${encodeURIComponent(p.id)}"
+          title="${esc(p.name||"")}" alt=""><i class="pnum">${i+1}</i></span>`).join("")}
+      <span class="hint" style="align-self:center">这几张会随提示词一起交给视频模型</span></div>`:""}
+    ${(c.features||[]).length?`<div class="hint">人物：${esc(c.features.join(" · "))}${
+      c.subject?`（${esc(c.subject)}）`:""}</div>`:""}
+    ${c.idea?`<div class="hint">你想的：${esc(c.idea)}</div>`:""}
+    ${c.note?`<div class="hint">${esc(c.note)}</div>`:""}
+    <div class="row" style="margin:8px 0 0">
+      <button class="mini" onclick="send('就用这版提示词生成视频吧')">就这个，生成</button>
+      <button class="mini" onclick="send('换个风格的视频提示词')">换个风格</button>
+    </div>`,
   // 上传卡片：用户在自己电脑选照片 → 传服务器 → 目录自动发给 agent
   // 上传卡片：事件一律**内联 + 相对查找**（不用 id，也不在渲染后用 setTimeout 补绑）。
   // ★ 为什么（09-12 用户报"框子点不动"查出来的）：renderCard 是"先 innerHTML、后插入
@@ -1036,7 +1091,8 @@ const RENDERERS={
   //   两张卡片时第二张的 onclick 是 null）。内联属性在元素插入时自然生效，`this`
   //   就是被点的那个元素，再用 closest/querySelector 在**本卡片内**找兄弟节点，
   //   几张卡片互不干扰。顺带把那个 setTimeout 也去掉了。
-  // 两种用途共用一张卡：purpose="xlsx" 收"用户改过的终版目录"，默认收翻拍照片。
+  // 三种用途共用一张卡：purpose="xlsx" 收"用户改过的终版目录"、purpose="portrait"
+  // 收人像参考图（skills/video）、默认收翻拍照片。
   // ★ 复用同一个渲染器而不是新写一张卡：选文件、显示已选、两步制提交这套行为一模一样，
   //   只有 accept/端点/文案不同 —— 分两个渲染器迟早有一边忘了改（仓库里踩过）。
   "upload-card":c=>c.purpose==="xlsx"?`<div class="caph">📄 <b>上传你改过的目录</b></div>
@@ -1048,6 +1104,18 @@ const RENDERERS={
       <input class="upfin" type="file"
         accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         style="display:none" onchange="recPick(this)">`
+    // 人像参考图（skills/video 用）：选 1~5 张**自己的**照片当视频主角的参考。
+    // 与下面那个照片分支的三点区别：不带 webkitdirectory（选文件、不选文件夹）、
+    // 限 5 张、走 /api/portrait（**要登录**、落文件区 —— 不会被 purge_old 清掉）。
+    // ★ 位置要紧：这条必须排在**默认分支之前**（最后一个 `:` 才是默认）。
+    :c.purpose==="portrait"?`<div class="caph">🧑 <b>选择你的人像照片</b>
+        <span class="hint">最多 5 张</span></div>
+      <div class="upc" onclick="ptOpen(this)"><b>${esc(c.hint||"选 1~5 张你自己的照片，正脸那张最有用")}</b>
+        <div class="hint upcnt">还没有选照片（可分几次选，自动合并）</div></div>
+      <button class="mini upgo" style="display:none;margin-top:8px"
+        onclick="ptGo(this)">开始上传</button>
+      <input class="upfin" type="file" accept="image/*" multiple
+        style="display:none" onchange="ptPick(this)">`
     :`<div class="caph">📁 <b>选择翻拍照片</b></div>
       <div class="upname"><label>干部姓名</label>
         <input class="upnm" type="text" placeholder="没填我会先问你"></div>
@@ -1182,6 +1250,41 @@ async function upGo(btn){
   send(`照片已上传：${d.dir}（${d.count} 张，${who}）`);
 }
 
+// ── 人像上传卡动作：选 1~5 张 → POST /api/portrait → 把"已上传"发给 agent ──
+// 和"照片上传"同一套两步制（选完先攒着、点按钮才真传），事件一律内联 + 相对查找。
+function ptOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
+function ptPick(input){
+  const card=upCard(input);
+  // 前端也卡 5 张（和后端同一上限）：让用户在选的时候就看见，别等上传完才被拒
+  card._upFiles=[...(card._upFiles||[]), ...(input.files||[])].slice(0,5);
+  if(!card._upFiles.length) return;
+  card.querySelector(".upc").classList.add("sel");
+  const cnt=card.querySelector(".upcnt"), go=card.querySelector(".upgo");
+  if(go) go.style.display="";
+  if(cnt) cnt.textContent=`已选 ${card._upFiles.length} 张（最多 5 张）—— 点「开始上传」`;
+}
+async function ptGo(btn){
+  const card=upCard(btn), cnt=card.querySelector(".upcnt");
+  const files=card._upFiles||[];
+  if(!files.length) return;
+  if(cnt) cnt.textContent=`正在上传 ${files.length} 张…`;
+  const fd=new FormData();
+  for(const f of files){ if(f instanceof File) fd.append("files",f,f.name); }
+  let r;
+  try{ r=await fetch("/api/portrait",{method:"POST",body:fd}); }
+  catch(e){ if(cnt) cnt.textContent="上传失败："+e.message; return; }
+  const d=await r.json().catch(()=>({}));
+  if(!d.files){ if(cnt) cnt.textContent=(d.detail||d.error||"上传失败，请重试"); return; }
+  cnt.textContent=`已上传 ${d.count} 张人像。`;
+  card._upFiles=[];
+  const go=card.querySelector(".upgo"); if(go) go.style.display="none";
+  // ★★ 这句话**必须含「视频」二字**：它就是一条路由输入，L1 靠关键词把它归回 video
+  //    技能（core/router.py 的 video 锚点 + unified._routing_hints，两处都有）。
+  //    不含的话会被 archive 的「上传照片」关键词接走 —— 那边没有 video 的工具，
+  //    用户看到的只是"点了没反应"。09-13 学习卡按钮踩过同一类。
+  send(`人像照片已上传，用于视频参考（${d.count} 张）`);
+}
+
 // ── 终版目录上传卡动作：选 xlsx → POST /api/archive/reconcile → 把路径发给 agent ──
 // 同"照片上传"一样是**两步制**（选完先攒着、点按钮才真传），事件一律内联 + 相对查找。
 function recOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
@@ -1251,6 +1354,46 @@ function jobPageHtml(p){
       ${kv?`<div class="kv">${kv}</div>`:`<div class="hint">这一页读不出内容（待人工核对）</div>`}
     </div></div>`;
 }
+// 进度面板的文案按**发起这条 job 的技能**取；没登记的技能走 _def 兜底。
+// ★ 为什么是一张表而不是"服务端下发"：这几个词是中文里**不同的说法**（识别 vs 生成），
+//   不是技能名的机械拼接。表加一条的成本是 1 行，不加也不崩（走 _def）。
+// ★ doneMsg 是"跑完了"那句兜底说明（任务没留下更好的 message 时才显示）。
+const JOB_WORDS={
+  "archive":{doing:"识别中",done:"识别完成",failed:"识别失败",
+             btn:"查看全景",say:"看看全景",doneMsg:"可以看全景核对了。",
+             doneHtml:()=>""},
+  "video":{doing:"生成中",done:"生成完成",failed:"生成失败",
+           btn:"在对话里查看",say:"看下刚生成的视频",
+           doneMsg:"视频已生成，可以直接播放或下载。",
+           // 生成完**当场就能播**，不必等模型再跑一轮。代价：这一块不在对话历史里
+           // （刷新就没了），所以它只是"顺手" —— 要留住的那张卡走 video.show。
+           doneHtml:s=>{const fid=((s&&s.artifacts)||[]).slice(-1)[0];
+             return fid?`<video class="vcard" controls preload="metadata"
+               src="/api/files/${encodeURIComponent(fid)}"></video>`:"";}},
+  "_def":{doing:"处理中",done:"已完成",failed:"失败",btn:"",say:"",
+          doneMsg:"任务已结束。",doneHtml:()=>""}
+};
+function jobWords(snap){ return JOB_WORDS[(snap&&snap.skill_id)||""]||JOB_WORDS._def; }
+// 「这条任务还在跑吗」——**queued 也算**。
+// ★ 为什么（09-14）：submit() 是"先落库、再起线程、线程里才置 running"，那个窗口是
+//   真实存在的；原来只认 running，窗口期内轮询会掉进 else → 面板显示「识别失败」，
+//   任务其实好好地跑着（视频任务还没排队那一步，更容易撞上）。
+// ★ 但 queued 不能无限等：万一 worker 线程死在置 running 之前，它会永远 queued。
+//   超过 JOB_STALE 秒没动静就当它结束了（走 done 分支，文案是"失败"，符合实情）。
+const JOB_STALE=120;
+function jobGoing(snap){
+  if(!snap) return false;
+  if(snap.status==="running") return true;
+  if(snap.status!=="queued") return false;
+  return (Date.now()/1000-(snap.updated||0))<JOB_STALE;
+}
+// 失败原因：后端把死因写成 "ValueError: 创建视频任务失败——…"，异常类名对用户是噪音，
+// 剥掉它；剥完为空才退回最后一条进度文案。都没有就老实说"见任务日志"。
+function jobFailReason(snap){
+  const m=String((snap&&snap.message)||"").trim();
+  const clean=m.replace(/^[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Warning):\s*/,"");
+  return clean || jobLastMessage(snap) || "详情见任务日志。";
+}
 function setJobEl(jobId, snap, done){
   const el=document.querySelector(`.prog[data-job="${jobId}"]`); if(!el) return;
   // ★ 大图开着的时候**先别重绘**：轮询每秒整体重绘 innerHTML，会把用户正看着的大图
@@ -1260,17 +1403,24 @@ function setJobEl(jobId, snap, done){
   const pct=Number(snap&&snap.progress||0);
   const msg=jobLastMessage(snap);
   const page=jobLastPage(snap);
+  const w=jobWords(snap);
   if(done && snap && snap.status==="done"){
-    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--ok)">识别完成</b>
-      <span class="hint">${esc(msg||"可以看全景核对了。")}</span>
-      <button class="mini" onclick="send('看看全景')">查看全景</button></div>`;
+    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--ok)">${w.done}</b>
+      <span class="hint">${esc(msg||w.doneMsg)}</span>
+      ${w.btn?`<button class="mini" onclick="send('${w.say}')">${w.btn}</button>`:""}</div>`
+      + w.doneHtml(snap);
   } else if(done){
-    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--err)">识别失败</b>
-      <span class="hint">${esc(msg||"详情见任务日志。")}</span></div>`;
+    // ★ 失败时**优先用任务自己的 message**（那里才是真正的死因），而不是最后一条进度
+    //   文案 —— 建任务就被挡回来的活压根没有进度事件，照原样只会显示一句"详情见任务
+    //   日志"，等于什么都没说。顺带把任务号带上，用户报问题时有据可查。
+    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--err)">${w.failed}</b>
+      <span class="hint">${esc(jobFailReason(snap))}</span></div>
+      <div class="hint">任务 ${esc((snap&&snap.id)||"")}</div>`;
   } else {
-    // 识别中：上面是"当前这张"的缩略图+内容（就地换），下面是总进度条
+    // 跑着：上面是"当前这张"的缩略图+内容（就地换；视频任务没有 page 事件，是空的），
+    // 下面是总进度条
     el.innerHTML=jobPageHtml(page)
-      +`<div class="row" style="margin:0"><span>识别中</span>
+      +`<div class="row" style="margin:0"><span>${w.doing}</span>
       <progress value="${pct}" max="100"></progress><span>${pct}%</span></div>
       <div class="hint">${esc(msg||"正在准备…")}</div>`;
   }
@@ -1281,7 +1431,7 @@ async function pollJob(jobId, tid){
   if(threadId!==tid){ delete _jobWatchers[jobId]; return; }
   try{
     const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
-    if(snap&&snap.status==="running"){
+    if(jobGoing(snap)){
       setJobEl(jobId,snap,false);
       pollJob(jobId,tid);
     } else {
@@ -1290,20 +1440,32 @@ async function pollJob(jobId, tid){
     }
   }catch(e){ delete _jobWatchers[jobId]; }
 }
-async function watchThreadJob(sd){
+async function watchThreadJob(sd, showEnded){
   const jobId=sd&&sd.job_id, tid=threadId;
-  if(!jobId||!tid||_jobWatchers[jobId]) return;
+  if(!jobId||!tid||_jobShown[jobId]) return;
   try{
     const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
-    if(!snap||snap.status!=="running") return;
-    _jobWatchers[jobId]=true;
+    if(!snap) return;
+    const going=jobGoing(snap);
+    // ★★ 收尾态也要把面板画出来，**但只在"刚刚发生"的那条路径上**（showEnded）：
+    //    任务可能在两次轮询之间就跑完了 —— 建任务就被对端 503 挡回来时，整个任务只活
+    //    一两秒，我们从来没"看见它在跑"。原来的写法是直接 return，于是**界面上什么
+    //    都没有**：用户只看到 agent 的一句文字，分不清"在跑"还是"已经死了"。
+    //    （09-14 用户实测报的："这种失败的时候没有进度条…影响用户判断"。）
+    //    为什么不无条件画：重开一个几天前的旧会话时，底部会凭空冒出一块旧进度条，
+    //    而它其实发生在后面的对话**之前** —— 那比不画更误导。
+    if(!going && !showEnded) return;
+    _jobShown[jobId]=true;              // 画过就不再画（_jobWatchers 轮询结束会删，别混用）
     const d=document.createElement("div");
     d.className="prog"; d.dataset.job=jobId;
     d.innerHTML="";
     $("#msgs").appendChild(d);
     $("#msgs").scrollTop=$("#msgs").scrollHeight;
-    setJobEl(jobId,snap,false);
-    pollJob(jobId,tid);
+    setJobEl(jobId,snap,!going);        // 收尾态直接画终态
+    if(going){
+      _jobWatchers[jobId]=true;
+      pollJob(jobId,tid);
+    }
   }catch(e){ /* job 可能刚结束/不存在，静默即可 */ }
 }
 
@@ -1367,7 +1529,10 @@ let cfgKeys={};        // provider id → 用户刚敲的 key。★ 必须存着
                        // 重绘冲掉、保存时静默丢失（踩过）
 // 槽位 → provider 的角色字段。★ 只有三个：原先的「给材料分类」槽 09-11 砍了，
 // 它和「通用模型」取的是同一个 text_model，档案定类现在走 chat（见 station_adapter）。
-const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model"};
+// 槽位 → provider 上存模型名的字段。加一行的同时**服务端要一起加**
+// （modelcfg 的 SLOT_LABELS / _ROLE_KEY），否则 ① 那行渲染不出来。
+const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model",
+                video:"video_model"};
 
 // ★ 面板必须显成 flex：它是「头 / 滚动体 / 钉底保存条」的三段布局，靠 flex 才有
 //   那个钉住的底栏。这里是**内联 style**，优先级高于样式表里的 display:flex ——
@@ -1529,6 +1694,9 @@ function cfgProvRow(p){
     //   拿不准就写"可留空"这种跟厂商无关的话。
     +cfgField(id,'route','意图识别模型',(p.route_model||""),"可留空","留空则与「通用模型」一致")
     +cfgField(id,'vision','识图模型',(p.vision_model||""),"需支持视觉输入","不处理图片时可留空")
+    // ★ 占位符不举别家模型名（老规矩，见上面 text 那行的注释）—— 内置的 Agnes 卡
+    //   本来就把模型名预填好了，用户不需要照着一个例子去填。
+    +cfgField(id,'video','视频生成模型',(p.video_model||""),"可留空","按文字生成短视频；不做视频时可留空")
     +'<span class="cfgp-key"><label for="cfgp-'+id+'-key">密钥</label>'
     +'<input id="cfgp-'+id+'-key" type="password" autocomplete="new-password" value="'+esc(kVal)+'" placeholder="'+esc(cfgKeyPlaceholder(p))+'">'
     +'<button class="ghost mini" title="显示框中的明文，便于核对" onclick="cfgTogglePw(\''+id+'\',this)">显示</button>'
@@ -1541,10 +1709,11 @@ function cfgCollect(){
   if(!cfgData) return;
   (cfgData.config.providers||[]).forEach(p=>{
     const g=i=>document.getElementById("cfgp-"+p.id+"-"+i);
-    const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),k=g("key");
+    const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),
+          vd=g("video"),k=g("key");
     if(l) p.label=l.value.trim();      if(u) p.base_url=u.value.trim();
     if(t) p.text_model=t.value.trim(); if(v) p.vision_model=v.value.trim();
-    if(r) p.route_model=r.value.trim();
+    if(r) p.route_model=r.value.trim(); if(vd) p.video_model=vd.value.trim();
     if(k) cfgKeys[p.id]=k.value;       // ★ key 也一起收走，否则重绘就丢了
   });
 }
@@ -1555,7 +1724,8 @@ function cfgPayload(){
   const c=cfgData.config;
   return {providers:(c.providers||[]).map(p=>{
     const o={id:p.id,label:p.label,base_url:p.base_url,text_model:p.text_model,
-             vision_model:p.vision_model,route_model:p.route_model,key_env:p.key_env};
+             vision_model:p.vision_model,route_model:p.route_model,
+             video_model:p.video_model,key_env:p.key_env};
     // ★ 只有**动过**才提交 api_key：原样不动就不带这个字段（服务端语义 = 不改动）。
     //   少了这个判断的话，框里预填的 src/.env 密钥会被一次"什么都没改"的保存
     //   复制进库，"来自 src/.env" 的来源标记就没了（用户再也分不清是抄来的还是自己填的）。
@@ -1601,6 +1771,7 @@ function cfgAddPreset(kind){
   }
   cfgData.config.providers.push({id:id,label:pre.label,base_url:pre.base_url,
     text_model:pre.text_model,vision_model:pre.vision_model,route_model:pre.route_model,
+    video_model:pre.video_model||"",
     key_env:"",api_key:"",builtin:false,has_key:false,
     key_source:(pre.api_key?"db":"none")});
   if(pre.api_key) cfgKeys[id]=pre.api_key;       // 本地 Ollama：密钥预填好，它不校验
@@ -1644,9 +1815,13 @@ async function cfgTest(pid){
       body:JSON.stringify({provider_id:pid})});
     d=await r.json().catch(()=>({}));
   }catch(e){ d={ok:false,hint:"请求未发出，请确认服务是否正在运行"}; }
-  say(d.ok
-    ? '<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>'
-    : '<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>');
+  // 三种结果。★ 中间那种（skip）是**中性提示**，不是失败：视频模型不是对话模型，
+  //   拿对话接口去打它必然 400 —— 显示成红叉会让用户去改一个本来正确的模型名。
+  say(d.skip
+    ? '<span class="hint">'+esc(d.hint||"这一行不支持试连")+'</span>'
+    : d.ok
+      ? '<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>'
+      : '<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>');
 }
 
 async function cfgReset(){

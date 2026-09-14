@@ -62,8 +62,15 @@ def heavy_slot(what: str, wait: float | None = None):
     必须自己看这个值 —— 不写成"拿不到就抛异常"，是因为两条路的处理方式完全不同
     （job 等、对话拒绝），让调用方自己写更清楚。
     """
+    # ★ 先把牌子取进**局部变量**，acquire 和 release 都用它。
+    #   别写成 acquire 时读一次全局 _gate、release 时再读一次 —— 那样"借的是 A 的牌子、
+    #   还的是 B 的牌子"（只要 _gate 中途被换过）。运行期 _gate 从不更换，所以这个写法
+    #   在线上无害；但单测的 fixture 会 monkeypatch 它，于是上一个用例留下的后台线程
+    #   会在新用例里还牌子 → 白送一个名额 → **闸静默失效**（正是这个模块最怕的故障）。
+    #   09-14 被 tests/test_heavy.py 的顺序依赖暴露出来，改成局部变量。
+    gate = _gate
     # acquire 的 timeout=None 就是"永远阻塞"，语义正好对上，不用分两个分支
-    got = _gate.acquire(timeout=wait)
+    got = gate.acquire(timeout=wait)
     if not got:
         yield False
         return
@@ -77,4 +84,4 @@ def heavy_slot(what: str, wait: float | None = None):
         with _names_lock:
             if what in _names:
                 _names.remove(what)
-        _gate.release()
+        gate.release()

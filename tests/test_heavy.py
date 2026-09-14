@@ -1,11 +1,14 @@
 """重活闸的离线单测 —— 不联网、不烧 key、不碰真数据。
 
-新手视角（Java 朋友版）：这一组只测一件事 —— **吃内存的活不许同时跑两件**。
+新手视角（Java 朋友版）：这一组测两件事 ——
+  ① **吃内存的活不许同时跑两件**（闸的本职）；
+  ② **纯网络等待型的活要能绕开这道闸**（技能的 manifest 里写 `heavy: false`）。
 
 为什么值得单独一组测试：这个闸坏掉的两种方式都**没有症状**——
   · 闸失效（两件并跑）→ 平时看不出，只在某个大卷上被内核 OOM 杀掉，现场什么都不留；
   · 闸卡死（牌子没还）→ 从此所有任务排队到天荒地老，表现是"点了没反应"。
 前者靠并发计数钉住，后者靠"抛异常的活也要还牌子"钉住。
+而 ② 坏掉同样没有症状：视频在等对端的那几分钟里把档案识别一起堵住，只是"今天有点慢"。
 """
 from __future__ import annotations
 
@@ -165,6 +168,116 @@ def test_waiting_job_says_it_is_queued(tmp_path):
         time.sleep(0.1)
     assert mgr.get(quick.id)["status"] == "done"    # 等到了就正常跑完
     assert mgr.get(slow.id)["status"] == "done"
+
+
+# ── 纯网络等待型的活绕开闸（技能的 manifest 写 heavy:false）─────────
+
+class _Net:
+    """假技能：声明自己**不吃内存**（heavy=False），照 skills/video 的样子。
+
+    它的 build_runner 只睡一下 —— 用来代表"几分钟都耗在等对端"的那类长活。
+    """
+    id = "demo-net"
+    name = "网络活"
+    keys: list = []
+    heavy = False                    # ★ 关键：就是这一行让它绕开闸
+
+    def build_runner(self, ctx, **kw):
+        def gen():
+            time.sleep(0.3)
+            yield {"type": "progress", "percent": 100, "message": "ok"}
+        return gen()
+
+
+def test_network_job_does_not_take_the_gate():
+    """★ 闸被别人占着时，heavy=false 的任务**照样能跑完**，而且**不说"排队"**。
+
+    两件事一起钉，因为它们是一体的：不进闸 → 就不该说自己排队（它确实没排队），
+    而前端进度面板显示的就是这个 message，说排队就是撒谎。
+    """
+    from station.jobs.manager import JobManager
+
+    mgr = JobManager()
+    with heavy.heavy_slot("别的重活"):               # 闸被占着（占用者一直不放）
+        job = mgr.submit(_Net(), {})
+        msgs: list[str] = []
+        for _ in range(60):                         # 最多等 6 秒
+            snap = mgr.get(job.id)
+            msgs.append(snap.get("message") or "")
+            if snap.get("status") in ("done", "failed"):
+                break
+            time.sleep(0.1)
+        snap = mgr.get(job.id)
+    assert snap["status"] == "done", (
+        f"网络型任务被重活闸挡住了（它本该绕开）：{snap['status']} / {snap['message']}")
+    assert not any("排队" in m for m in msgs), f"它没在排队，不该说排队：{msgs}"
+
+
+def test_heavy_and_network_jobs_run_side_by_side():
+    """★ 重活之间仍然串行，但**网络活之间不再互相排队**，且能和重活并行。
+
+    这就是 heavy:false 的全部意义：视频在等对端的那几分钟里，档案识别不该陪着一起等。
+    两条断言缺一不可 —— 只测 peak_net==2 的话，"把 heavy_slot 整个删掉"（连重活也不串行了）
+    照样绿。
+    """
+    from station.jobs.manager import JobManager
+
+    lock = threading.Lock()
+
+    def _counter():
+        """造一对 (进入记数函数, 取峰值函数)，避免三个变量手写四遍。"""
+        box = {"live": 0, "peak": 0}
+
+        def enter():
+            with lock:
+                box["live"] += 1
+                box["peak"] = max(box["peak"], box["live"])
+        return box, enter
+
+    heavy_box, heavy_enter = _counter()
+    net_box, net_enter = _counter()
+
+    class _Heavy:
+        id = "demo-h"
+        name = "重活"
+        keys: list = []
+
+        def build_runner(self, ctx, **kw):
+            def gen():
+                heavy_enter()
+                try:
+                    time.sleep(0.5)                 # 窗口够长，并跑就一定测得出来
+                    yield {"type": "progress", "percent": 100, "message": "ok"}
+                finally:
+                    with lock:
+                        heavy_box["live"] -= 1
+            return gen()
+
+    class _NetSide(_Heavy):
+        id = "demo-n"
+        heavy = False                           # 同形状，只多这一行
+
+        def build_runner(self, ctx, **kw):
+            def gen():
+                net_enter()
+                try:
+                    time.sleep(0.5)
+                    yield {"type": "progress", "percent": 100, "message": "ok"}
+                finally:
+                    with lock:
+                        net_box["live"] -= 1
+            return gen()
+
+    mgr = JobManager()
+    jobs = [mgr.submit(_Heavy(), {}), mgr.submit(_NetSide(), {}), mgr.submit(_NetSide(), {})]
+    for _ in range(80):                             # 最多等 8 秒
+        if all((mgr.get(j.id) or {}).get("status") in ("done", "failed") for j in jobs):
+            break
+        time.sleep(0.1)
+    assert [mgr.get(j.id)["status"] for j in jobs] == ["done"] * 3
+    assert heavy_box["peak"] == 1, f"重活之间仍必须串行（同时跑了 {heavy_box['peak']} 件）"
+    assert net_box["peak"] == 2, (
+        f"网络活之间不该互相排队（同时只有 {net_box['peak']} 件）—— heavy:false 没生效？")
 
 
 # ── 对话里的导出：忙就当场说清楚，不许干等 ────────────────────────

@@ -152,6 +152,10 @@ class Registry:
                   entry=m.get("entry", ""),                # 代码入口（import 谁）
                   keys=m.get("keys", []),                  # 需要的 key 白名单
                   model=m.get("model", "text"),
+                  # 这条技能的后台 job 吃不吃内存（见 manifest.py 的 Skill.heavy）。
+                  # ★ 缺省/写错一律当"吃内存"：宁可让网络型长活多排一会儿队，
+                  #   也不能让吃内存的活漏出闸外（漏出去的代价是内核 OOM，没有症状）。
+                  heavy=bool(m.get("heavy", True)),
                   icon=m.get("icon", ""), builtin=m.get("builtin", []),
                   group=m.get("group", ""),                # 前端分组（可选，如"干部档案"）
                   # 系统提示词：读技能目录下的 system.md（agent 型的"岗位须知"，见 _read_system）

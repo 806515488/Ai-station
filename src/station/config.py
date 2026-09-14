@@ -23,7 +23,10 @@ DATA_DIR = REPO / "data" / "station"                  # 运行时数据（已在
 
 # ---- 默认模型通道 -----------------------------------------------------
 # 文本/text 默认 glm，视觉/vision 默认 qwen（沿用 archive 口径；可被 .env 覆盖）
-DEFAULT_CHANNEL = {"text": "glm", "vision": "qwen"}
+# video 是 09-14 加的第四类：目前只有 Agnes AI 一家提供，所以默认就是它。
+# ★ 加这条不只是"多个默认值"——channel_for() 是直接 DEFAULT_CHANNEL[kind] 取值的，
+#   少一个键就是 KeyError（modelcfg._default_slots 会在零配置时踩它）。
+DEFAULT_CHANNEL = {"text": "glm", "vision": "qwen", "video": "agnes"}
 
 # ---- 宿主开关（也能用环境变量临时覆盖，见 .env.example）----------------
 MAX_STEPS = int(os.environ.get("STATION_MAX_STEPS", "10"))   # agent 一轮最多工具步数
@@ -66,6 +69,57 @@ def load_env() -> dict:
                 os.environ[k] = v
                 loaded[k] = v
     return loaded
+
+
+def _is_private_host(host: str) -> bool:
+    """这个主机名是不是"对端根本抓不到"的回环/内网地址。
+
+    域名一律放行（localhost 除外）—— 我们没法也不该去解析域名判断它指向哪。
+    """
+    h = (host or "").strip().strip("[]").lower()
+    if h in ("localhost", "0.0.0.0"):
+        return True
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False                        # 是域名，放行
+    return bool(ip.is_private or ip.is_loopback
+                or ip.is_link_local or ip.is_reserved or ip.is_unspecified)
+
+
+def public_base() -> str:
+    """本机**对外**的基址（如 `https://your-host:8443`）；没配或不合法返回 ""。
+
+    为什么需要它：有些能力要把一个 URL 交给**外部服务**去抓（视频生成的人像参考图就是
+    —— 对端要求"可由 Agnes 服务公开访问的链接"）。而**服务器自己不知道自己在外面叫什么**：
+    容器里绑的是 `0.0.0.0`、本机开发是 `127.0.0.1`，拿它们拼出来的 URL 对端一辈子也抓不到。
+    所以只能由部署的人配（`STATION_PUBLIC_BASE`）。
+
+    ★★ 必须写成**函数**而不是模块级常量：`load_env()` 是在 `main()` 里才被调用的，
+      写成常量的话 `src/.env` 里配的值会被**静默忽略**（`STATION_MAX_STEPS` 已经踩过这个坑）。
+    ★ 返回 "" 的两种情形**一视同仁**（没配 / 配成了回环内网）：对端抓不到就是抓不到，
+      调用方据此**提前拒绝**，而不是等生成了半天才失败。
+
+    ★ 校验里**含 IP 私网判定**：`127.*` / `10.*` / `192.168.*` / `172.16-31.*` / `::1`
+      这些配上去看着像"我配了"，其实对端一次都抓不到 —— 那比不配更难查。
+    """
+    load_env()
+    u = (os.environ.get("STATION_PUBLIC_BASE") or "").strip().rstrip("/")
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return ""
+    host = u.split("//", 1)[1].split("/", 1)[0].split(":")[0]
+    if not host or _is_private_host(host):
+        return ""
+    return u
+
+
+def public_base_hint() -> str:
+    """没配好时给用户/运维看的那句话（说清在哪配、为什么需要）。"""
+    return ("本机还没配**对外地址**（环境变量 STATION_PUBLIC_BASE），"
+            "所以没法把照片交给视频服务 —— 它需要一个从公网能访问到的链接。"
+            "部署时在 docker-compose.yml 里配成 `https://<你的域名或公网IP>:<端口>`；"
+            "本机开发时对端抓不到 localhost，这一项功能用不了。")
 
 
 def channel_for(kind: str) -> str:

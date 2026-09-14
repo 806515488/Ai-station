@@ -13,9 +13,11 @@ import pytest
 
 from station import db, modelcfg
 
-# 三个槽位的固定顺序（跟 SLOT_LABELS 对齐，改这里要一起改）。
+# 四个槽位的固定顺序（跟 SLOT_LABELS 对齐，改这里要一起改）。
 # ★ 09-11 起没有 "text" 槽了：它和 "chat" 取的是同一个 text_model，合并成一个。
-SLOTS = ("chat", "route", "vision")
+# ★ 09-14 加了 "video"（视频生成模型）。**别嫌它新就不加进来** —— 不加的话，
+#   _slots() 造出来的配置里永远没有视频那一行，整套用例对它的校验就是空白。
+SLOTS = ("chat", "route", "vision", "video")
 
 
 def _slots(*pids: str) -> dict:
@@ -24,10 +26,14 @@ def _slots(*pids: str) -> dict:
 
 
 def _p(pid: str, **kw) -> dict:
-    """造一个 provider 条目（默认字段齐全，便于被 _validate 放行）。"""
+    """造一个 provider 条目（默认字段齐全，便于被 _validate 放行）。
+
+    ★ 四个模型名字段都要给默认值：_slots() 会把这家塞进**每一个**槽位，少给一个
+      就会有用例莫名多出"未填写「xx模型」"的问题（不是被测逻辑坏了，是夹具没跟上）。
+    """
     p = {"id": pid, "label": pid, "base_url": "https://x.example/v1",
          "text_model": "t-" + pid, "vision_model": "v-" + pid,
-         "route_model": "", "key_env": ""}
+         "route_model": "", "video_model": "vm-" + pid, "key_env": ""}
     p.update(kw)
     return p
 
@@ -56,14 +62,17 @@ def test_no_config_means_builtin_defaults(monkeypatch):
     monkeypatch.setenv("ROUTE_CHANNEL", "qwen-flash")
 
     cfg = modelcfg.load_config("u1")
-    assert [p["id"] for p in cfg["providers"]] == ["glm", "deepseek", "qwen"]
+    assert [p["id"] for p in cfg["providers"]] == ["glm", "deepseek", "qwen", "agnes"]
     assert cfg["slots"]["chat"] == ["glm"]
     assert cfg["slots"]["vision"] == ["qwen"]
-    # 只认三个槽位：老的 slots.text 不该在新配置里冒出来
-    assert set(cfg["slots"]) == {"chat", "route", "vision"}
+    # 只认这四个槽位：老的 slots.text 不该在新配置里冒出来
+    assert set(cfg["slots"]) == {"chat", "route", "vision", "video"}
     # route 默认必须还是"用 qwen 家的 qwen-flash 模型"——与改造前 ROUTE_CHANNEL 完全一致
     assert cfg["slots"]["route"] == ["qwen"]
     assert [e["model"] for e in modelcfg.resolve("u1", "route")] == ["qwen-flash"]
+    # ★ 视频那行零配置就该能用：链首 agnes、模型名是那个限时免费的档
+    assert cfg["slots"]["video"] == ["agnes"]
+    assert [e["model"] for e in modelcfg.resolve("u1", "video")] == ["agnes-video-2.5-flash"]
     # ★ 只是"读"，不能合成一行落库：否则每个用户一登录库就长出一堆默认配置
     assert db.model_config_load("u1") is None
 
@@ -177,7 +186,7 @@ def test_guest_sees_no_key_in_ui_payload(monkeypatch, owner, guest):
 
 
 def test_legacy_text_slot_in_stored_config_is_dropped(owner):
-    """老库里存着 slots.text（09-11 之前配的）也不能炸，读出来只留三个槽位。
+    """老库里存着 slots.text（09-11 之前配的）也不能炸，读出来只留现在这四个槽位。
 
     这是真机上一定会走到的迁移路径：用户改版前保存过配置，库里就有这个键。
     """
@@ -187,7 +196,7 @@ def test_legacy_text_slot_in_stored_config_is_dropped(owner):
         "slots": {"chat": ["glm"], "route": ["glm"],
                   "vision": ["glm"], "text": ["glm"]}})     # ← 直接写原始配置，绕过 save_config
     cfg = modelcfg.load_config(owner)
-    assert set(cfg["slots"]) == {"chat", "route", "vision"}
+    assert set(cfg["slots"]) == {"chat", "route", "vision", "video"}
     assert cfg["slots"]["chat"] == ["glm"]
     # 老配置里的 key 不能被顺手丢掉
     assert modelcfg.load_config(owner)["providers"][0]["api_key"] == "sk-老的"
@@ -292,12 +301,52 @@ def test_save_rejects_bad_config_with_readable_reason(bad, needle):
     assert needle in str(e.value)
 
 
+# ── 第四类槽位：视频生成模型（09-14）─────────────────────────────────
+
+def test_provider_without_text_model_can_be_saved():
+    """★ 服务商可以"只有视频这一个能力"，不该被要求填「通用模型」。
+
+    agnes 没有对话模型（text/vision/route 全空），只提供视频生成 —— 这是事实，不是漏填。
+    所以"必须填 text_model"那条检查从 provider 级挪进了槽位循环（进了哪一行，才要哪一
+    行的模型名）。
+
+    ★ 两半缺一不可：只写前半的话，把 _validate 整个删掉这条照样绿。
+    """
+    cfg = modelcfg.default_config()
+    assert modelcfg.save_config("u1", cfg)          # 默认配置本就把 agnes 放在视频那一行
+
+    agnes = [p for p in cfg["providers"] if p["id"] == "agnes"][0]
+    assert not agnes["text_model"] and not agnes["vision_model"], \
+        "agnes 本来就该没有对话/识图能力；它有的这一条要是变了，这条护栏的前提就变了"
+
+    # 后半：把视频模型名清空 → 这一行就没法用了，**必须拦**，且文案要点名到那个格子
+    agnes["video_model"] = ""
+    with pytest.raises(ValueError) as e:
+        modelcfg.save_config("u1", cfg)
+    assert "视频生成模型" in str(e.value)
+
+
+def test_video_slot_is_not_probed_as_chat():
+    """★ 「测试连接」不能拿对话接口去打视频模型。
+
+    视频模型不是对话模型，用 max_tokens=1 打 /chat/completions 必然 400 —— 那**不是
+    "连不上"**，是探法不对。显示成红叉会让用户去改一个本来正确的模型名（假红灯比
+    不测更糟）。所以 probe_entry 多回一个"命中的是哪个槽位"，端点靠它跳过试连。
+    """
+    modelcfg.save_config("u1", modelcfg.default_config())
+    url, key, model, slot = modelcfg.probe_entry("u1", "agnes")
+    assert slot == "video" and model == "agnes-video-2.5-flash"
+    assert slot in modelcfg.PROBE_NOT_CHAT, "这个槽位必须在「跳过试连」的名单里"
+    # 内置那几家仍然先命中 chat —— 行为一字不变（video 排在 order 最后）
+    assert modelcfg.probe_entry("u1", "glm")[3] == "chat"
+
+
 def test_builtin_backfill():
     """验证库里存的旧配置会自动补上"代码里新加的内置家"（用户没动过它就用默认值）。"""
     db.model_config_save("u1", {"version": 1, "providers": [_p("glm")],
                                 "slots": _slots("glm")})
     got = modelcfg.load_config("u1")
-    assert {p["id"] for p in got["providers"]} == {"glm", "deepseek", "qwen"}
+    assert {p["id"] for p in got["providers"]} == {"glm", "deepseek", "qwen", "agnes"}
 
 
 def test_unknown_version_falls_back_with_warn():
@@ -306,7 +355,7 @@ def test_unknown_version_falls_back_with_warn():
                                 "slots": _slots("glm")})
     got = modelcfg.load_config("u1")
     assert "warn" in got
-    assert {p["id"] for p in got["providers"]} == {"glm", "deepseek", "qwen"}
+    assert {p["id"] for p in got["providers"]} == {"glm", "deepseek", "qwen", "agnes"}
 
 
 def test_delete_restores_defaults():
@@ -400,15 +449,25 @@ _KNOWN_DIFF = {("deepseek", "text"), ("deepseek", "vision")}
 
 
 def _provider_diff() -> set:
-    """算出两份表**实际**不一致的字段集合，元素形如 ("deepseek", "text")。"""
+    """算出两份表**实际**不一致的地方：
+      ("deepseek", "text")             ← 共有的家、某个字段对不上
+      ("agnes", "__only_in_archive__") ← archive 有、station 没有的（单向哨兵）
+
+    ★ 09-14 起这个方法**只有一个方向**：archive ⊆ station。
+      为什么不是"两边名单必须一模一样"：station 是宿主（Web 侧）的表，它天然会多出
+      **只有宿主才用得上**的家 —— agnes 只提供视频生成，archive 的识别链一辈子用不到，
+      硬要 archive 也抄一份是为对称而对称，而且那张表里会多一条永远走不到的死记录
+      （等于在代码里写"archive 也能用 agnes"，误导后来的人）。
+      但**反方向绝不能松**：archive 的某家如果在 station 里找不到，说明"识别侧能调、
+      宿主侧配置页里却看不到"，那才是真漂移 —— 所以哨兵按家一条，能点名是谁。
+    """
     from archive.engine import providers
     station_by_id = {p["id"]: p for p in modelcfg.BUILTIN_PROVIDERS}
     out = set()
-    if set(providers.PROVIDERS) != set(station_by_id):
-        out.add(("__providers__", "只有一边有的服务商"))
     for pid, arc in providers.PROVIDERS.items():
         st = station_by_id.get(pid)
         if st is None:
+            out.add((pid, "__only_in_archive__"))
             continue
         for a, b in _FIELDS:
             if (arc.get(a) or "") != (st.get(b) or ""):
@@ -417,13 +476,16 @@ def _provider_diff() -> set:
 
 
 def test_provider_tables_do_not_drift():
-    """archive 的 PROVIDERS 表与 station 的 BUILTIN_PROVIDERS **不许漂移**。
+    """archive 的 PROVIDERS 表**不许漂出** station 的 BUILTIN_PROVIDERS（单向）。
 
     为什么是"两份表 + 护栏"而不是"合并成一份"：两边都要能**独立跑**（宿主 Web 一份、
     archive 的 CLI / 将来的 MCP 进程一份），合并就得让 archive import station，跟
     "技能要能搬走"的目标反着走。但地址、密钥环境变量、模型名是**同一批服务商**，
     必须一致 —— 这两张表历史上真漂移过（同是 deepseek，一边 deepseek-flash、
     一边 deepseek-v4-flash），正是当初引入 modelcfg 统一配置的起因。
+
+    ★ 09-14 起方向是**单向**的（archive ⊆ station）：station 可以有 archive 用不到的
+      专属家（agnes 只服务宿主侧的视频生成）。反方向的缺失仍然要报 —— 见 _provider_diff。
     """
     diff = _provider_diff()
     new = diff - _KNOWN_DIFF            # 新出现的差异 = 有人只改了其中一边
@@ -435,12 +497,12 @@ def test_provider_tables_do_not_drift():
         "\n  背景见 docs/status.md 挂起问题「deepseek 的模型名两处不一致」")
 
 
-def test_provider_drift_guard_actually_bites():
-    """护栏自检：把 archive 侧某家的字段改坏，_provider_diff 必须报出来。
+def test_provider_drift_guard_actually_bites(monkeypatch):
+    """护栏自检：四个方向都试一遍，确认它真的在比对（而不是因为"没什么可比"才绿）。
 
     为什么单独测一条：这个护栏**如今是绿的**（差异恰好等于登记的那两条），而"绿"
     有两种可能 —— 真的没漂移，还是它根本没在比对。这里临时改一份表把第二种可能
-    排除掉：摘掉比对逻辑，这条必红。
+    排除掉：摘掉比对逻辑，这几条必红。
     """
     import archive.engine.providers as pv
     original = pv.PROVIDERS["glm"]
@@ -452,3 +514,26 @@ def test_provider_drift_guard_actually_bites():
         assert ("glm", "vision") in _provider_diff()
     finally:
         pv.PROVIDERS["glm"] = original      # 还原，别污染别的用例
+
+    # ★ 反方向（archive 独有）**必须**报警 —— 这正是单向化之后唯一还锁着的方向。
+    #   删掉 _provider_diff 里那句 `out.add((pid, "__only_in_archive__"))`，这条立刻红。
+    pv.PROVIDERS["只在 archive 有"] = {
+        "base_url": "https://x.example/v1", "text": "t", "vision": "", "key": "K"}
+    try:
+        assert ("只在 archive 有", "__only_in_archive__") in _provider_diff(), \
+            "archive 多出一家却没报警 = 单向护栏漏了唯一该管的方向"
+    finally:
+        pv.PROVIDERS.pop("只在 archive 有", None)
+
+    # ★ 正方向（station 独有）**不许**报警。这条断言的是一"没有"，所以必须**显式造出
+    #   "station 确实多了一家"的现场**，否则它又变成一条不可能失败的断言。
+    extra = {"id": "只有宿主有", "label": "只有宿主有",
+             "base_url": "https://y.example/v1", "text_model": "t",
+             "vision_model": "", "route_model": "", "video_model": "",
+             "key_env": ""}
+    monkeypatch.setattr(modelcfg, "BUILTIN_PROVIDERS",
+                        [*modelcfg.BUILTIN_PROVIDERS, extra])
+    assert any(p["id"] == "只有宿主有" for p in modelcfg.BUILTIN_PROVIDERS), \
+        "现场没造出来（monkeypatch 没生效），下面那条断言就没意义了"
+    assert not [d for d in _provider_diff() if d[0] == "只有宿主有"], \
+        "station 多一家不算漂移 —— 这里报红说明护栏又退回对称比较了"

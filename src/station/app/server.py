@@ -21,6 +21,7 @@ from __future__ import annotations        # 允许注解写 `str | None`（Pytho
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -310,7 +311,7 @@ def test_model_config(body: ProviderTestIn, request: Request):
         raise HTTPException(429, "测试过于频繁，请稍后重试")
     from station import modelcfg
     try:
-        url, key, model = modelcfg.probe_entry(u["id"], body.provider_id, body.slot)
+        url, key, model, hit_slot = modelcfg.probe_entry(u["id"], body.provider_id, body.slot)
     except ValueError as e:
         raise HTTPException(400, str(e))
     from urllib.parse import urlparse
@@ -322,6 +323,15 @@ def test_model_config(body: ProviderTestIn, request: Request):
     if not key:
         return {"ok": False, "error": "NoKey", "ms": 0,
                 "hint": "尚未配置密钥，请填写后重试（本地 Ollama 可填任意非空值）"}
+    # ★ 命中"不是对话模型"的槽位（目前只有视频）→ **跳过试连**，回一句中性提示。
+    #   为什么不试：这条路的探法是拿 max_tokens=1 打 /chat/completions，而视频模型
+    #   根本不是对话模型，必然 400 —— 那**不是"连不上"，是探法不对**。显示成红叉会
+    #   让用户去改一个本来正确的模型名（假红灯比不测更糟）。
+    #   也别改成 GET /models 探活：无法确认对端实现了它，探不到又是一次假红灯。
+    #   顺序放在"没填密钥"之后 —— "你还没填密钥"比"这里测不了"更该先说。
+    if modelcfg.PROBE_NOT_CHAT.get(hit_slot):
+        return {"ok": None, "skip": True, "ms": 0,
+                "hint": modelcfg.PROBE_NOT_CHAT[hit_slot]}
     t0 = time.perf_counter()
     try:
         from langchain_openai import ChatOpenAI
@@ -356,6 +366,55 @@ async def upload_photos(files: list[UploadFile] = File(...),
     purge_old(root)                              # 只留最近这一批
     d, n = store_upload(root, items, label.strip())
     return {"dir": d, "count": n, "label": label.strip()}
+
+
+# ── 人像参考图上传（skills/video 用：用户自己的照片，当视频的参考图）────
+MAX_PORTRAITS = 5            # 视频模型 Flash 档最多接受 5 张参考图
+
+
+@app.post("/api/portrait")
+async def upload_portrait(files: list[UploadFile] = File(...), request: Request = None):
+    """收 1–5 张人像照片 → 归一化 → 落**文件区**，返回按序的 fid 列表。
+
+    ★★ 与上面 `POST /api/photos` 的两处关键差别（改之前先看清）：
+      ① **要登录**（那个端点没有鉴权，是历史遗留）；
+      ② 落 `files/` 而**不是** `uploads/` —— `uploads/` 会被下一次 `POST /api/photos`
+         的 `purge_old` **无条件清空**（它 rmtree 掉底下每一个子目录，不看时间）。
+         status.md 记过同一个坑：对账目录 `uploads/final/` 就是这么被删掉的。
+    ★ 落盘前用 `files.image.normalize_jpeg` 过一遍：缩尺寸 + **脱掉 EXIF（含 GPS）**，
+      并保证"提取特征用的图"与"交给视频模型的参考图"是同一份字节。
+    ★ `portrait_index` 是**批内次序**，它决定提示词里 `<Picture N>` 的编号 ——
+      不能靠 created 时间戳推（同批连着写可能撞同一个值），所以显式记下来。
+    """
+    u = require_user(request)
+    items: list[tuple[str, bytes]] = []
+    for f in files:
+        data = await f.read()
+        if data:
+            items.append((f.filename or "", data))
+    if not items:
+        raise HTTPException(400, "没有收到照片")
+    if len(items) > MAX_PORTRAITS:
+        raise HTTPException(400, f"最多传 {MAX_PORTRAITS} 张（收到 {len(items)} 张）")
+
+    from station.files import image as image_util
+    from station.files import store as fs
+
+    batch = uuid.uuid4().hex[:8]
+    fids: list[str] = []
+    for i, (name, data) in enumerate(items):
+        try:
+            norm = image_util.normalize_jpeg(data)
+        except ValueError as e:
+            # 带上"第几张" —— 一次传 5 张时，只说"这张太小了"用户不知道是哪张
+            raise HTTPException(400, f"第 {i + 1} 张：{e}")
+        fids.append(fs.save_bytes(
+            norm, ".jpg", name=name or f"人像{i + 1}.jpg",
+            owner=u["id"], skill_id="video",
+            group_key=f"portrait:{u['id']}:{batch}",
+            group_label=f"人像参考图 · {time.strftime('%m-%d %H:%M')}",
+            extra={"portrait_index": i}))
+    return {"files": fids, "count": len(fids)}
 
 
 # ── 会话（09-06 起按用户隔离）─────────────────────────────────────
@@ -825,6 +884,40 @@ def get_file(fid: str, dl: int = 0, request: Request = None):
         return FileResponse(p, media_type=media,
                             filename=meta.get("name", "download"))  # 带下载名
     return FileResponse(p, media_type=media)                        # 浏览器预览
+
+
+# ── 能力令牌端点：让**外部服务**临时取一份文件 ─────────────────────
+#
+# ★★★ 这是全站**唯一一个不校验登录的读数据端点**，所以每一条设计都是有意的：
+#   · 认证就是**令牌本身**（不可猜的随机串，签发在 files/share.py，全仓唯一签发口）；
+#   · **只查表**，绝不接受任何形如路径/文件 id/序号的入参 —— 否则就把
+#     "猜不到令牌" 降级成 "猜得到一个文件 id 就行"；
+#   · 未命中与已过期**一律 404**：返 403/410 等于告诉枚举者"你猜到了，只是过期了"；
+#   · 表里取出的 fid 再过一道**格式校验**才交给文件层（`fs.path()` 拿它拼路径，
+#     表要是被写脏了就是一个路径穿越）；
+#   · 响应头不许缓存、不许被搜索引擎索引、**不带原始文件名**（那串名字可能含真名）。
+#   要再加"外部能取我们的东西"的能力，请复用这一条 + share.py，别另开端点。
+
+_REF_FID_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+@app.get("/api/ref/{token}")
+def get_shared_file(token: str):
+    """凭令牌取一份文件（**免登录**，给 Agnes 抓人像参考图用）。"""
+    from station import db
+    from station.files import store as fs
+
+    fid = db.ref_link_resolve(token or "")          # 过期判断在 SQL 里，这里不碰时间
+    if not fid or not _REF_FID_RE.match(fid):
+        raise HTTPException(404, "链接不存在或已过期")   # 一律 404，防探测
+    p = fs.path(fid)
+    if p is None:
+        raise HTTPException(404, "文件不存在")          # 表里有行但文件没了 → 404 不是 500
+    meta = fs.meta(fid)
+    resp = FileResponse(p, media_type=meta.get("mime") or "application/octet-stream")
+    resp.headers["Cache-Control"] = "no-store"      # 任何中间代理都不该缓存用户的照片
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return resp
 
 
 # ── 静态 UI（末尾挂载，/api 路由优先）─────────────────────────────

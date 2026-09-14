@@ -30,6 +30,16 @@ services:
       # 两个都给才开 HTTPS；只给一个会以 HTTP 起站并在日志里告警（见 _serve_options）
       STATION_SSL_KEYFILE: "/certs/key.pem"
       STATION_SSL_CERTFILE: "/certs/cert.pem"
+      # ★ 本机**对外**的地址 —— 外部服务要靠它来抓我们托管的东西（视频生成的人像参考图）。
+      #   服务器自己不知道自己在外面叫什么：容器里绑的是 0.0.0.0，拿它拼出来的 URL
+      #   对端一辈子也抓不到。**不配这一项 = 人像参考图功能不可用**（会明确拒绝，
+      #   不是静默失败，见 config.public_base_hint）。
+      # ★★ 值刻意**不写死在这里**：它跟着部署环境走，而这个文件会进公开仓库 ——
+      #   把真实主机名写进去就等于公开告诉别人你的服务器在哪。
+      #   部署时在**同一个目录**放一个 `.env`（已被 .gitignore 挡住，不入库）写：
+      #       STATION_PUBLIC_BASE=https://你的域名或公网IP:8443
+      #   docker compose 会自动读它做这里的变量替换。没配就是空串。
+      STATION_PUBLIC_BASE: "${STATION_PUBLIC_BASE:-}"
 
     volumes:
       # ★★ 唯一会丢用户数据的地方 ★★

@@ -124,10 +124,21 @@ def init_db(c: sqlite3.Connection) -> None:
         cfg      TEXT NOT NULL,      -- JSON：{version, providers[], slots{}}
         updated  REAL NOT NULL
     );
+    -- 能力令牌：把某个文件**临时**开给外部服务抓取（视频生成的人像参考图就是这么用的）。
+    -- 为什么不直接把文件 id 当公开路径：fid 是内容 sha1，那等于给了一个可枚举的面，
+    -- 而且没有过期概念 —— 一旦公开就是永久公开。这里存的是不可猜、会过期、可撤销的取件码。
+    CREATE TABLE IF NOT EXISTS ref_links(
+        token    TEXT PRIMARY KEY,   -- 取件码（secrets.token_urlsafe，不可猜）
+        fid      TEXT NOT NULL,      -- 指向文件区哪个文件
+        user_id  TEXT NOT NULL,      -- 谁签发的（撤销/审计用）
+        expires  REAL NOT NULL,      -- 过期时间戳（秒）：判断写进 SQL，别在 Python 里比
+        created  REAL NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id, updated);
     CREATE INDEX IF NOT EXISTS idx_jobs_user    ON jobs(user_id, updated);
     CREATE INDEX IF NOT EXISTS idx_states_user  ON archive_states(user_id, updated);
     CREATE INDEX IF NOT EXISTS idx_ck_project   ON checkpoints(project, id);
+    CREATE INDEX IF NOT EXISTS idx_ref_expires  ON ref_links(expires);
     """)
     _migrate(c)
     c.commit()
@@ -544,3 +555,57 @@ def model_config_delete(user_id: str) -> None:
     with _lock:
         conn().execute("DELETE FROM model_configs WHERE user_id=?", (user_id,))
         conn().commit()
+
+
+# ── 能力令牌（ref_links）：把文件临时开给外部服务抓取 ──────────────────
+# ★ 这一组是**全站唯一能让"不登录的人"读到数据**的凭据，所以：
+#   · 令牌不可猜（签发在 files/share.py，用的是 secrets 而不是 uuid）；
+#   · **过期判断写进 SQL**，不在 Python 里比时间 —— 两边时钟/口径不一致时会
+#     出现"库里说没过期、代码说过期"的扯皮，而这是安全问题，不能有解释空间；
+#   · **未命中一律当作不存在**（调用方返 404，不要 403/410 区分"没有/过期了"，
+#     那等于给枚举者一个"猜对了但过期了"的信号）。
+
+def ref_link_add(token: str, fid: str, user_id: str, expires: float) -> None:
+    """登记一条令牌。token 必须是**调用方生成的随机串**（本层不生成，方便单测）。"""
+    with _lock:
+        conn().execute(
+            "INSERT OR REPLACE INTO ref_links(token,fid,user_id,expires,created) "
+            "VALUES(?,?,?,?,?)",
+            (token, fid, user_id or "", float(expires), _now()))
+        conn().commit()
+
+
+def ref_link_resolve(token: str) -> str:
+    """令牌 → 文件 id；**不存在或已过期都返回空串**（调用方一律当 404）。"""
+    if not token:
+        return ""
+    with _lock:
+        row = conn().execute(
+            "SELECT fid FROM ref_links WHERE token=? AND expires > ?",
+            (token, _now())).fetchone()
+        return (row["fid"] or "") if row else ""
+
+
+def ref_link_revoke(tokens) -> int:
+    """撤销若干令牌（任务跑完就该收回）。返回真删掉的行数。
+
+    ★ 调用方**必须容错**：这个函数抛异常不能影响业务结果（见 video 的 build_runner）——
+      一个已经生成成功的视频不该因为"撤销链接时数据库抽了一下"被判成失败。
+    """
+    toks = [t for t in (tokens or []) if t]
+    if not toks:
+        return 0
+    with _lock:
+        cur = conn().execute(
+            "DELETE FROM ref_links WHERE token IN (%s)" % ",".join("?" * len(toks)),
+            tuple(toks))
+        conn().commit()
+        return int(cur.rowcount or 0)
+
+
+def ref_link_sweep() -> int:
+    """清掉已过期的行（顺手做，不需要后台定时任务）。返回清掉几条。"""
+    with _lock:
+        cur = conn().execute("DELETE FROM ref_links WHERE expires <= ?", (_now(),))
+        conn().commit()
+        return int(cur.rowcount or 0)

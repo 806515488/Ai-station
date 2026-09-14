@@ -39,13 +39,22 @@ def _dir() -> Path:
 
 def save_bytes(data: bytes, suffix: str = ".txt", name: str = "",
                *, owner: str = "", skill_id: str = "",
-               group_key: str = "", group_label: str = "") -> str:
+               group_key: str = "", group_label: str = "",
+               extra: dict | None = None) -> str:
     """写一个文件，返回它的 id（内容编号）。
 
     data   文件内容（bytes）；suffix 后缀（决定 mime）；name 人看的文件名（下载时用）。
     同内容再次保存 → sha1 相同 → 不重复写，直接返回同一个 id。
     owner/skill_id/group_key/group_label 是可选的来源元数据（谁生成/哪个技能/
     哪批产物），前端按它们分组；“我的产物”只会显示 owner 是自己的文件。
+    extra  额外的自定义元数据（原样并进去）。
+
+    ★ extra 是为「**同一批文件里的次序**」加的（09-14，人像参考图）：一次上传几张照片时，
+      它们在同一批里谁排第一是有意义的（就是提示词里 `<Picture 1>` 的编号），
+      而 `created` 是**写入时刻的时间戳** —— 连着写几张可能撞到同一个值，
+      靠它排序在关键场景会**静默指错**。
+      ⚠️ 但要注意元数据是**按内容覆盖写**的：同一份字节被两处保存时，后写的 extra
+      会盖掉先写的（和 owner 一样）。所以 extra 只放"这份内容是什么"，别放"谁在用"。
     """
     # sha1 是对“内容”算指纹：一模一样的字节必得同样的 id（去重的关键）
     fid = hashlib.sha1(data).hexdigest()
@@ -64,6 +73,7 @@ def save_bytes(data: bytes, suffix: str = ".txt", name: str = "",
     if skill_id:    meta["skill_id"] = skill_id
     if group_key:   meta["group_key"] = group_key
     if group_label: meta["group_label"] = group_label
+    if extra:       meta.update(extra)
     (_dir() / (fid + suffix)).write_bytes(data)
     mp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return fid

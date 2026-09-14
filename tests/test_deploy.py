@@ -81,6 +81,27 @@ def test_compose_mounts_the_data_volume():
     assert "/srv/station/data:/app/data" in txt
 
 
+def test_compose_declares_public_base():
+    """★ 对外地址必须出现在 compose 里，但**值要从环境变量取**。
+
+    两半都要：
+      · 漏了声明 → **静默降级**：容器照常起、功能入口照常在，只是"把照片交给视频服务"
+        那一步永远拒绝，运维根本不知道少了什么（和 data 卷那条同一个道理）；
+      · 值写死 → 这个文件会进公开仓库，等于**把真实主机名公开**。所以要断言它取的是
+        `${STATION_PUBLIC_BASE…}` 而不是一个具体地址。
+    """
+    txt = (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    # ★ 按**行**取，别用 `split("STATION_PUBLIC_BASE:")` —— 变量引用 `${X:-}` 里的 `:-`
+    #   本身就让这个串出现两次，切出来的是半截（我第一版就这么写错、还误以为文件坏了）。
+    lines = [l for l in txt.splitlines() if l.strip().startswith("STATION_PUBLIC_BASE:")]
+    assert lines, "compose 没声明对外地址 —— 人像参考图会一直不工作"
+    val = lines[0].split(":", 1)[1].strip().strip('"').strip("'")
+    assert val.startswith("${STATION_PUBLIC_BASE"), \
+        f"对外地址被写死了（{val}）—— 真实主机名会跟着进公开仓库"
+    assert ":-" in val, \
+        "要带一个空默认值 —— 没配时该是空串（让功能明确拒绝），而不是连到别的地方"
+
+
 def test_compose_binds_all_interfaces():
     """★ 容器里必须绑 0.0.0.0，否则端口映射过去也没人应答。"""
     txt = (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
