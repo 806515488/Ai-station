@@ -406,8 +406,39 @@ def test_make_submits_job_with_clamped_args(monkeypatch):
     #   进了 jobs.args 就是一行长期明文（那是取用户照片的钥匙）。
     assert all("http" not in str(v) for v in args.values()), "args 里混进了 URL"
     assert uid == "u1", "归属没传下去 = 产物变成无主的"
-    assert "job-video-1" in out
+    assert "job-video-1" in out["text"]
     assert (ctx.thread is None) or ctx.thread.meta.get("job_id")
+
+
+def test_make_sends_a_job_card_not_just_text(monkeypatch):
+    """★★ 起任务时**要发一张进度块卡片**（09-16 改，修用户报的两个 bug）。
+
+    卡片走"工具返回 render → 宿主落进会话 meta"这条路，所以刷新后**在原位**重画；
+    全靠前端"回合结束往末尾追加一块"的话：① 刷新就没了（成片只活在那块面板上）；
+    ② 一回合以"等你批准"结束时也会追加，那时会话里的 job_id 还是上一个任务 ——
+    旧成片会顶在新批准卡下面（用户原话："重新生成怎么把以前的视频调出来了"）。
+    """
+    from station.core.agent import run_tool
+    from station.core.events import EV_RENDER
+    from station.jobs import manager as jm
+
+    class _FakeJob:
+        id = "job-video-9"
+
+    class _FakeMgr:
+        def submit(self, skill, args, user_id=""):
+            return _FakeJob()
+
+    monkeypatch.setattr(jm, "get_manager", lambda: _FakeMgr())
+    ctx = _ctx()
+    make = next(t for t in get_registry().get("video").tools if t.leaf() == "make")
+
+    out = run_tool(ctx, make, {"prompt": "一只猫跳上窗台", "seconds": "5"})
+    cards = [e.data["card"] for e in ctx.events if e.type == EV_RENDER]
+    assert cards and cards[0]["type"] == "job"
+    # 卡片里只有 job_id —— 视频字节/文件名都不进卡（卡要落进会话 meta）
+    assert cards[0] == {"type": "job", "job_id": "job-video-9"}
+    assert isinstance(out, str) and "job-video-9" in out, "模型那边仍然只拿到文字"
 
 
 def test_seconds_and_aspect_are_clamped_on_the_public_path():

@@ -170,6 +170,36 @@ def export_archive(result: dict):
     return _save_files(paths, prod_meta)
 
 
+def _job_retry_notifier(ctx):
+    """给识别链造一个"正在重连"的显示回调（模型层退避时叫它）。
+
+    为什么落在这里：`core/model.py` 与 `archive/engine/*` **都不认识 job**（那是宿主
+    的东西），engine 只负责"叫一声"，由**上站桥**（本文件）把它接到宿主的进度条上。
+    engine 侧只收一个普通函数，不 import 任何宿主模块 —— 分层不破。
+
+    返回 None 表示"没人听"（CLI/离线跑没有 job_id），engine 那边会安静跳过。
+    """
+    jid = str(getattr(ctx, "job_id", "") or "")
+    if not jid:
+        return None
+    from station.jobs.manager import get_manager        # 函数内 import：顶层只留标准库
+
+    def note(ev: dict) -> None:
+        # ★ 刻意**不传 percent**：manager.Job.append 的写法是
+        #   `progress = ev.get("percent", 当前值)` —— 不带这个键就保持原进度、
+        #   只刷新文案。传了会把进度条冲回 0，用户看着像倒退了。
+        # ★ Job.append 自带锁，从识别链的并发 worker 线程里调是安全的。
+        job = get_manager().get(jid)
+        if job is not None:
+            job.append({
+                "type": "progress",
+                "message": (f"模型连接失败，{float(ev.get('wait') or 0):g} 秒后重试"
+                            f"（第 {ev.get('attempt')}/{ev.get('total')} 次）"),
+            })
+
+    return note
+
+
 def build_runner(ctx, photos_dir: str = "", project: str = "", person: str = "",
                  limit: int = 0, order: str = "拍摄时间",
                  provider: str = "", refresh: bool = False):
@@ -270,8 +300,11 @@ def build_runner(ctx, photos_dir: str = "", project: str = "", person: str = "",
                 raise RuntimeError(
                     f"识图模型「{provider}」没配置或看不了图 ——"
                     f"在界面右上角「模型配置」里给它填上「识图模型」再试")
-        llm_text = make_model("text", entries=entries_text)
-        llm_vision = make_model("vision", entries=entries_vision)
+        # on_retry：模型层退避重连时，把"正在重连 / 还有几秒"写进 job 的进度文案。
+        # 识别链的 6 路并发 worker 都会调它，所以 Job.append 那把锁是必需的（它本来就有）。
+        note_retry = _job_retry_notifier(ctx)
+        llm_text = make_model("text", entries=entries_text, on_retry=note_retry)
+        llm_vision = make_model("vision", entries=entries_vision, on_retry=note_retry)
         # 建档链的标签：OCR 缓存的键之一。★ 必须传下去 —— 缓存键若不跟着用户的
         # 通道选择走，把视觉换成 glm 之后，同一张图用 glm 读的结果会被 qwen 的请求
         # 命中（静默的错误结果，不是崩溃，极难发现）。

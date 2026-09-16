@@ -70,11 +70,15 @@ def build_generic_agent() -> GenericAgent:
 
 
 def build_skill_catalog() -> list[SkillRef]:
-    """列出可路由的 agent 技能描述（只读 name/desc，不给模型工具 schema）。"""
+    """列出可路由的 agent 技能描述（只读 name/desc，不给模型工具 schema）。
+
+    ★ 目录里**只有磁盘上的技能**：外部 MCP 工具**不走路由**（09-16 用户拍板）——
+      路由判的是"这句话属于哪个业务领域"，而"要不要搜索"该由模型自己判断。
+      它们直接进 `core/agent.tools_for()` 的工具面，见 mcp/bridge.py 文件头。
+    """
     from station.skills.registry import get_registry
-    reg = get_registry()
     out = []
-    for s in reg.list():
+    for s in get_registry().list():
         if s.type != "agent":
             continue                       # 非对话形态的技能（如 demo-pipe 纯后台）不进对话目录
         if s.id == "demo-agent":

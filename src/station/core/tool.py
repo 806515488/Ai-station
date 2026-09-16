@@ -50,6 +50,16 @@ class Tool:
     # 留空/抛异常都不影响流程（前端退回只显示 label）。
     preview: Callable[..., Any] | None = None
 
+    # 可选：**参数表已经是标准 JSON Schema**（外部来源的工具，如 MCP）时原样用它。
+    # 为什么需要这个口子：上面那套 `args`（人话类型 str/int/…）翻译出来只有
+    # `{type, description}` 两项 —— **丢 enum、丢嵌套对象**。而 MCP server 给的
+    # `inputSchema` 本来就是一份完整的 JSON Schema，硬压成 args 会把
+    # "这个参数只能填这几个值"这类约束丢掉，模型就容易填错参数。
+    # 有它 → `schema()` 原样用；没有 → 照旧从 `args` 翻译（既有技能零改动）。
+    # 内容应当是 **parameters 那一层**（`{"type":"object","properties":{…},"required":[…]}`），
+    # 不是整个 function object。
+    input_schema: dict | None = None
+
     def leaf(self) -> str:
         """去掉命名空间，只要最后一段：demo.now → now。
 
@@ -63,6 +73,19 @@ class Tool:
         这段是给模型看的“工具使用说明”：模型据此知道有哪些工具、每个参数要不要、类型是啥。
         结构是一个很标准的嵌套 dict，别被吓到，跟着注释读一遍就会了。
         """
+        # 外部来源的工具（MCP）参数表本来就是 JSON Schema → 原样用，别翻译（会丢信息）
+        if self.input_schema:
+            params = dict(self.input_schema)
+        else:
+            params = self._params_from_args()
+        # 最外层组装成 OpenAI 要求的 function object
+        return {"type": "function", "function": {
+            "name": self.name,
+            "description": self.description,
+            "parameters": params}}
+
+    def _params_from_args(self) -> dict:
+        """把「人话参数清单」翻译成 JSON Schema 的 parameters 那一层。"""
         props: dict = {}             # props = 每个参数名 → 它的类型和描述
         required: list[str] = []     # required = 必填参数名列表
         # 遍历我们声明的参数清单（比如 [{name:"text", type:"str", desc:"…", required:True}]）
@@ -75,10 +98,6 @@ class Tool:
             # 若声明了必填（默认必填），就把参数名加进 required 列表
             if a.get("required", True):
                 required.append(a["name"])
-        # 最外层组装成 OpenAI 要求的 function object
-        return {"type": "function", "function": {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {"type": "object",        # 参数整体是一个 JSON 对象
-                           "properties": props,     # 每个参数的具体定义
-                           "required": required}}}
+        return {"type": "object",        # 参数整体是一个 JSON 对象
+                "properties": props,     # 每个参数的具体定义
+                "required": required}

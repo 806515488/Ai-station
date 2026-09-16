@@ -423,8 +423,20 @@ def _preview_make(ctx, prompt: str = "", seconds: str = "5",
     return "\n".join(lines)
 
 
-def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9") -> str:
-    """起一个后台生成任务，立刻返回（不阻塞对话）。"""
+def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
+    """起一个后台生成任务，立刻返回（不阻塞对话）；**顺手发一张进度块卡片**。
+
+    返回 `{"text": …, "render": {"type":"job", "job_id": …}}` —— 文字照旧回给模型，
+    卡片由宿主落到会话里（前端拿 job_id 拉进度、成了就把成片嵌在里面播）。
+
+    ★ 进度块做成**卡片**是 09-16 改的，为的是修用户报的两个毛病，根子是同一个：
+      卡片经 `_remember_card` 进会话 meta，刷新后**在原位**重画；而以前那块进度条是
+      前端"一个回合结束时追加到对话末尾"的 ——
+        ① 它不在历史里：成片只活在那块面板上，一刷新就没了；
+        ② 一回合以"等你批准"结束时也会追加，而那一刻会话里的 job_id 还是**上一个**
+           任务 —— 旧成片会顶在新批准卡下面，看着像"重新生成却把以前的视频调出来"。
+      卡片把这两条一起解决了：位置对（跟着工具调用走）、内容在（落库）。
+    """
     from station.jobs.manager import get_manager
     from station.skills.registry import get_registry
 
@@ -462,8 +474,15 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9") -> 
         user_id=_owner(ctx))
     _remember_job(ctx, job.id)
     who = f"，带 {len(photos)} 张人像参考" if photos else ""
-    return (f"开始生成了（任务 {job.id}）：{sec} 秒 / {ar} / {SIZE}，用 {entry.get('label')}{who}。"
-            f"预计要等几分钟，进度在下面的面板里；期间你可以继续跟我说话。")
+    return {
+        "text": (f"开始生成了（任务 {job.id}）：{sec} 秒 / {ar} / {SIZE}，"
+                 f"用 {entry.get('label')}{who}。预计要等几分钟，"
+                 f"进度就在上面那条进度块里，生成好会直接嵌在里面；"
+                 f"期间你可以继续跟我说话。"),
+        # ★ job_id 就是一切：前端拿它拉 /api/jobs/{id} 画进度、成片也从那儿取。
+        #   卡片只放 id、不放视频字节 —— 卡是要落进会话 meta 的（见上面 docstring）。
+        "render": {"type": "job", "job_id": job.id},
+    }
 
 
 # ── 工具：status / show ──────────────────────────────────────────────
@@ -715,8 +734,10 @@ def tools() -> list[Tool]:
              args=[{"name": "job_id", "type": "str",
                     "desc": "任务号（可省，默认本会话最近一次）", "required": False}]),
         Tool(name="show", label="播放生成的视频",
-             description=("把生成好的视频发成一张卡片（对话里能直接播放和下载）。"
-                          "★ 确认生成完成之后就**主动调一次**，别只回一句文字。"),
+             description=("把某一条成片单独发成一张卡片（对话里能直接播放、能下载）。"
+                          "★ 成片本来就嵌在 `make` 发出的那块进度块里（生成完自动出现），"
+                          "所以**生成完不用再调它**；只在用户要重看某一条、或要下载链接，"
+                          "或那条不是这个会话刚生成的时候才用。"),
              run=t_show,
              args=[{"name": "file_id", "type": "str",
                     "desc": "产物文件号（可省，默认本会话最近一次的产物）",

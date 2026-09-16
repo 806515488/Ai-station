@@ -82,6 +82,40 @@ def l1_route(text: str, skill_ids: set[str]) -> RouteHit | None:
     return None
 
 
+# ── "切换词根"：线程已经在某个技能里时，靠什么判断"用户真的换了一件事" ──────
+#
+# ★★ 为什么需要这条规则（09-14 用户实测踩到的真 bug）：
+#   L1 和 L2 **都是无上下文的** —— 它们只看当前这一句。于是在一条**视频**线程里，
+#   用户说"重新生成一个，我重新上传照片"，L1 撞上档案的词表里的"上传照片"、L2 也跟着
+#   判档案，线程就被抢走了。后果不只是"答非所问"：**技能一换，工具集跟着换** ——
+#   `video.ask_photo` 当场从模型手上消失，而模型（从自己记的笔记里）知道该用它，
+#   手上却没有，只能反复调 remember/recall 兜圈子，一整轮什么都没办成。
+#
+#   规矩：**已经在做的事，要有一个明确的反向信号才换**。这里的"明确信号"= 消息里
+#   真的出现了目标技能的词根（用户说"帮我整理这卷干部档案"就该切过去）。
+#   ★ 没登记的新技能**不限制**（行为与加这条之前一致）—— 宁可新技能好使，
+#     也不要它因为漏登记而不响应。
+_SWITCH_ROOTS = {
+    "archive": ("档案", "翻拍", "卷", "出件", "材料清单", "全景", "口径", "文种"),
+    "weekly-report": ("周报", "总结"),
+    "video": ("视频", "短片", "动画", "出镜"),
+}
+
+
+def may_switch_to(text: str, target: str, active: str) -> bool:
+    """线程已经在 `active` 技能里时，准不准切到 `target`。
+
+    返回 False = **留在原技能**（调用方据此忽略这次判定）。
+    """
+    if not target or not active or target == active:
+        return True                      # 没目标 / 没在做什么 / 本来就是它 → 放行
+    roots = _SWITCH_ROOTS.get(target)
+    if roots is None:
+        return True                      # 没登记的技能不限制
+    t = text or ""
+    return any(r in t for r in roots)
+
+
 def _parse_json(text: str) -> dict | None:
     """从模型回答里抠出 JSON（先整体试，再抠第一个 {…} 块）。"""
     if not text:
@@ -176,9 +210,12 @@ def l2_route(text: str, catalog: list, diag: dict | None = None,
         # ROUTE_CHANNEL 指定的那家）。★ total_budget 必须传 timeout ——
         # 1.5 秒是**整条链一共**的预算，不是每条链各 1.5 秒；否则用户给判词排了
         # 3 家时就要等 4.5 秒，等于把 09-10 刚修好的卡顿原样还回来。
+        # ★ retries=0：**判词槽不许退避重连**（09-15 加）。上面那条"不重试"现在
+        #   由这个参数显式保证 —— 默认 5 次的退避会把这 10 秒预算整条吃掉，
+        #   判词就不再是"加速通道"而是"先卡 31 秒再说"了。
         model = Model("text", timeout=timeout, max_retries=0,
                       entries=modelcfg.resolve(user_id, "route"),
-                      total_budget=timeout)
+                      total_budget=timeout, retries=0)
         skill_lines = []
         for c in catalog:
             skill_lines.append(

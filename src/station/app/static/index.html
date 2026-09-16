@@ -236,29 +236,32 @@
      布局是「头 / 滚动体 / 钉底保存条」三段：底栏不跟着滚，所以
      「提示语 + 保存按钮」永远同屏 —— 这是修「点了保存没反应」那个坑的正面做法
      （光靠 cfgSay 里 scrollIntoView 兜底太脆）。 */
-  #cfgScrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:70}
-  #cfgPanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  #cfgScrim,#mcpScrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:70}
+  /* MCP 那对再高一档：两个面板万一同时开着，后开的那个要压在模型配置上面 */
+  #mcpScrim{z-index:72}
+  #cfgPanel,#mcpPanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
             width:min(880px,95vw);max-height:86vh;z-index:71;
             display:flex;flex-direction:column;overflow:hidden;
             background:var(--panel);border:1px solid var(--line);border-radius:14px;
             box-shadow:0 24px 64px rgba(0,0,0,.5)}
-  #cfgPanel .head{flex:none;display:flex;align-items:flex-start;gap:10px;
+  #mcpPanel{z-index:73;width:min(760px,95vw)}
+  #cfgPanel .head,#mcpPanel .head{flex:none;display:flex;align-items:flex-start;gap:10px;
             padding:13px 16px;border-bottom:1px solid var(--line);background:var(--panel2)}
   .cfg-title{flex:1;min-width:0}
   .cfg-title b{display:block;font-size:15px;font-weight:600;line-height:1.4}
   .cfg-title span{display:block;font-size:12px;color:var(--dim)}
-  #cfgBody{flex:1;overflow:auto;padding:0 18px 14px}
-  #cfgBody::-webkit-scrollbar{width:11px}
-  #cfgBody::-webkit-scrollbar-thumb{background:#2c313c;border-radius:6px;
+  #cfgBody,#mcpBody{flex:1;overflow:auto;padding:0 18px 14px}
+  #cfgBody::-webkit-scrollbar,#mcpBody::-webkit-scrollbar{width:11px}
+  #cfgBody::-webkit-scrollbar-thumb,#mcpBody::-webkit-scrollbar-thumb{background:#2c313c;border-radius:6px;
             border:3px solid var(--panel)}
-  #cfgBody::-webkit-scrollbar-thumb:hover{background:#3b4250}
-  #cfgBody::-webkit-scrollbar-track{background:transparent}
+  #cfgBody::-webkit-scrollbar-thumb:hover,#mcpBody::-webkit-scrollbar-thumb:hover{background:#3b4250}
+  #cfgBody::-webkit-scrollbar-track,#mcpBody::-webkit-scrollbar-track{background:transparent}
   /* 底部钉住的保存条 */
-  #cfgFoot{flex:none;border-top:1px solid var(--line);background:var(--panel2);
+  #cfgFoot,#mcpFoot{flex:none;border-top:1px solid var(--line);background:var(--panel2);
            padding:9px 18px 11px}
   .cfgFootRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  #cfgFootHint{line-height:1.6;margin-bottom:7px;font-size:12px;min-height:0}
-  #cfgFootHint:empty{display:none}
+  #cfgFootHint,#mcpFootHint{line-height:1.6;margin-bottom:7px;font-size:12px;min-height:0}
+  #cfgFootHint:empty,#mcpFootHint:empty{display:none}
   .cfgWarn{color:var(--warn);font-size:12px}
   /* 分节标题：序号徽章 + 主标题 + 一行说明 */
   .cfgsec{display:flex;gap:9px;align-items:flex-start;margin:22px 0 2px}
@@ -297,15 +300,15 @@
   .cfgchip .cb button:hover{background:#2c3546;color:var(--fg)}
   .cfgslot-acts{display:flex;gap:2px;align-items:center;flex-wrap:wrap}
   /* 下拉一律做成"次级控件"：无边框底、悬停才亮，避免每行两个大灰框抢视线 */
-  #cfgPanel select{background:transparent;border:1px solid transparent;color:var(--dim);
+  #cfgPanel select,#mcpPanel select{background:transparent;border:1px solid transparent;color:var(--dim);
             border-radius:7px;padding:3px 6px;font:inherit;font-size:11px;cursor:pointer;
             max-width:160px}
-  #cfgPanel select:hover{border-color:var(--line);color:var(--fg)}
-  #cfgPanel select:focus{outline:none;border-color:var(--acc);color:var(--fg)}
+  #cfgPanel select:hover,#mcpPanel select:hover{border-color:var(--line);color:var(--fg)}
+  #cfgPanel select:focus,#mcpPanel select:focus{outline:none;border-color:var(--acc);color:var(--fg)}
   /* ★ 下拉的**弹出列表**不在 select 这个盒子里：Chrome/Windows 给它的是系统白底，
      而 option 会继承我们这套浅色字 → 白字白底 = 选项整个看不见（踩过）。
      必须单独给 option 指定底色和字色，别只调 select。 */
-  #cfgPanel select option{background:var(--panel2);color:var(--fg)}
+  #cfgPanel select option,#mcpPanel select option{background:var(--panel2);color:var(--fg)}
   /* 底栏那两个是"主控件"（加一家 / 恢复默认），得有可见的框，别跟着做成隐形 */
   #cfgFoot select{border-color:var(--line);color:var(--fg)}
   /* 离线模式提示（STATION_FAKE=1 才出现）：单独成条，别和正文说明混在一起 */
@@ -336,10 +339,16 @@
   .cfgp input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);
               border-radius:7px;padding:6px 9px;font:inherit;font-size:12px}
   .cfgp input:focus{outline:none;border-color:var(--acc)}
+  /* MCP 的"请求头"是一行一条的文本，用多行框；走等宽字体 —— 密钥里 0/O、1/l 看错很常见 */
+  .cfgp textarea{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);
+              border-radius:7px;padding:6px 9px;font-size:12px;resize:vertical;
+              font-family:ui-monospace,Consolas,monospace;line-height:1.5}
+  .cfgp textarea:focus{outline:none;border-color:var(--acc)}
   .cfgp-key{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:2px;
             padding-top:9px;border-top:1px dashed var(--line)}
   .cfgp-key label{width:100px;flex:none;font-size:12px;color:var(--dim)}
   .cfgp-key input{flex:1;min-width:0}
+  .cfgp-key textarea{flex:1;min-width:0}
   .cfgp-key button{flex:none}
   .cfgt{font-size:12px;margin-top:8px;line-height:1.5}
   .cfgt:empty{display:none}
@@ -397,6 +406,7 @@
     <div class="bar"><b>对话</b>
       <span style="flex:1"></span>
       <button class="ghost mini" title="模型配置（这个站用哪家的 AI）" onclick="toggleConfig(true)">⚙</button>
+      <button class="ghost mini" title="MCP 服务（接入外部工具服务）" onclick="toggleMcp(true)">🔌</button>
       <button class="ghost mini" title="我的产物" onclick="toggleProducts(true)">🗂</button>
       <button class="ghost" id="btnNew">新对话</button>
       <span style="width:1px;height:20px;background:var(--line)"></span>
@@ -448,6 +458,37 @@
       <button class="ghost mini" id="cfgReset">恢复默认配置</button>
       <span style="flex:1"></span>
       <button id="cfgSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- MCP 服务弹窗：结构和模型配置那个一模一样（头 / 滚动体 / 钉底条），
+     样式也共用同一批选择器（见样式表里成对出现的 #cfgPanel,#mcpPanel）。
+     z-index 比模型配置再高一档：两个面板万一同时开着，这个是后开的那个。 -->
+<div id="mcpScrim" style="display:none" onclick="toggleMcp(false)"></div>
+<div id="mcpPanel" style="display:none">
+  <div class="head">
+    <div class="cfg-title"><b>MCP 服务</b>
+      <span>接入外部的 MCP 工具服务；接进来的工具会像技能一样出现在对话里</span></div>
+    <button class="ghost mini" onclick="toggleMcp(false)" title="收起">✕</button>
+  </div>
+
+  <div id="mcpBody">
+    <p class="hint" style="margin:14px 0 0;line-height:1.7">
+      一个 MCP 服务就是「一堆工具的提供方」。填上它的接口地址、点「测试连接」，
+      拉到工具清单之后，模型在对话里就能用它们了。<br>
+      ★ 只能填 <b>http / sse</b> 两种远端地址 —— 本站不允许在服务器上启动外部程序。
+    </p>
+    <div id="mcpList"></div>
+  </div>
+
+  <div id="mcpFoot">
+    <div class="hint" id="mcpFootHint"></div>
+    <div class="cfgFootRow">
+      <button class="ghost mini" id="mcpAddBtn" title="加一个远端 MCP 服务">＋ 添加服务</button>
+      <button class="ghost mini" id="mcpReset">清空我配的服务</button>
+      <span style="flex:1"></span>
+      <button id="mcpSaveBtn">保存</button>
     </div>
   </div>
 </div>
@@ -732,22 +773,31 @@ function breakBubble(){ box=null; acc=""; }
 // —— 等待态（见上面 .pending 的样式注释）——
 // 生命周期：send() 时出现 → stage 事件换一次文案 → 第一个 delta/tool/render/出错时消失。
 // ★ 它是**纯前端、不落盘**的临时节点：刷新回放里不该出现，所以不走 addMsg/卡片那套。
-let pendEl=null, pendT0=0, pendTimer=null, pendBase="";
+let pendEl=null, pendT0=0, pendTimer=null, pendBase="", pendRetry=null;
 const PEND_SLOW_MS = 8000;      // 超过这个时长就开始报秒数（数字在走 = 还活着）
 function pendingPaint(){
   if(!pendEl) return;
+  const t = pendEl.querySelector(".txt"), sec = pendEl.querySelector(".sec");
+  // 重连态（模型调用失败、正在退避重试，见 core/model.py 的 RETRY_WAITS）：
+  // 说清发生了什么 + **倒计时**（数字在减 = 马上就要再试一次，比"还在处理"有用得多）
+  if(pendRetry){
+    const left = Math.max(0, Math.ceil((pendRetry.until-Date.now())/1000));
+    t.textContent = "连接失败，正在重试（第 "+pendRetry.attempt+"/"+pendRetry.total+" 次）";
+    sec.textContent = left>0 ? "还有 "+left+" 秒…" : "正在重试…";
+    return;
+  }
   const s = Math.round((Date.now()-pendT0)/1000);
   const slow = Date.now()-pendT0 >= PEND_SLOW_MS;
-  const t = pendEl.querySelector(".txt"), sec = pendEl.querySelector(".sec");
   t.textContent = slow ? "还在处理，已等 " : pendBase;
   sec.textContent = slow ? s + " 秒…" : "";
 }
 function clearPending(){
   if(pendTimer){ clearInterval(pendTimer); pendTimer=null; }
   if(pendEl){ pendEl.remove(); pendEl=null; }
+  pendRetry=null;
 }
 function showPending(text){
-  clearPending();
+  clearPending();                             // 它会把 pendRetry 一并清掉
   pendT0 = Date.now(); pendBase = text;
   pendEl = document.createElement("div");
   pendEl.className = "pending";
@@ -761,7 +811,15 @@ function showPending(text){
     const m=$("#msgs"); m.scrollTop=m.scrollHeight;
   }, 500);
 }
-function setPending(text){ if(pendEl){ pendBase=text; pendingPaint(); } }
+// setPending = 普通阶段文案（"正在思考…"）：**退出重连态**，回到按总时长报秒数。
+function setPending(text){ if(pendEl){ pendRetry=null; pendBase=text; pendingPaint(); } }
+// 模型调用失败、正在退避重连：ev = {attempt, total, wait, error}（服务端 core/agent.py 透传）
+function setPendingRetry(ev){
+  if(!pendEl) showPending("正在思考…");       // 兜底：万一等待态已经退场了，先造一个
+  pendRetry = { attempt: ev.attempt||1, total: ev.total||0,
+                until: Date.now() + (Number(ev.wait)||0)*1000 };
+  pendingPaint();
+}
 
 async function send(text,opts={}){
   if(!opts.fromApprove){ addMsg("u",esc(text)); }
@@ -776,6 +834,8 @@ async function send(text,opts={}){
         localStorage.setItem("stLast",JSON.stringify({thread:threadId}));
         markHistory(); refreshHistory(); }
       else if(ev.type==="stage"){ setPending(ev.text||"正在思考…"); }   // 路由结束、开始生成
+      // 模型连不上、正在退避重连（服务端 core/model.py 的 RETRY_WAITS）：等待态里报倒计时
+      else if(ev.type==="retry"){ setPendingRetry(ev); }
       // 正文流：用 rAF 按帧合并重绘（每个字都重排太浪费），并懒创建气泡
       else if(ev.type==="delta"){
         clearPending();                        // 真字来了，等待态退场
@@ -865,6 +925,8 @@ function renderCard(card){
   d.innerHTML=fn(card);
   $("#msgs").appendChild(d);
   $("#msgs").scrollTop=$("#msgs").scrollHeight;
+  // 进度块卡片是空壳，内容要现拉（历史回放那条路同样走这里 —— 刷新后进度/成片才回得来）
+  if(card.type==="job") fillJobCard(card);
   return d;
 }
 // overview 预填：点条目 → 一句话放进输入框，用户确认发送（一切"操作"走对话）
@@ -1044,6 +1106,16 @@ window.spinImg=(btn,d)=>{
 };
 
 const RENDERERS={
+  // 进度块卡片（job）：后台任务（视频生成…）的进度面板 —— **长在发起它的那个位置**。
+  // ★★ 为什么是卡片、而不是"回合结束时往对话末尾追加一块"（09-16 改，修用户报的两个
+  //    bug，根子是同一个）：卡片经后端的 `_remember_card` 落进会话 meta，刷新后会在
+  //   **原来那个位置**重画出来；追加式那块不在历史里 ——
+  //     ① 成片只活在那块面板上，一刷新就没了（"生成的视频当时能出来，刷新就没了"）；
+  //     ② 一个以"等你批准"结束的回合也会追加，而那一刻会话里的 job_id 还是**上一个**
+  //        任务，于是旧成片顶在新批准卡下面，看着像"重新生成却把以前的视频调出来"。
+  //   内容为空壳：真正的字由 fillJobCard 拉一次任务快照填进去（在跑的会接着轮询）。
+  "job":c=>`<div class="prog" data-job="${esc(c.job_id||"")}"
+    style="width:100%;max-width:100%"></div>`,
   // 文件卡片：产物下载（4件套 / 周报 / 任意文件引用）
   "file-card":c=>`<div class="caph">📎 <b>产物文件</b>${c.note?` <span>${esc(c.note)}</span>`:""}</div>
     <div class="fcard">${(c.files||[]).map(f=>fileRow(f)).join("")||'<span class="hint">（无）</span>'}</div>`,
@@ -1363,13 +1435,21 @@ const JOB_WORDS={
              btn:"查看全景",say:"看看全景",doneMsg:"可以看全景核对了。",
              doneHtml:()=>""},
   "video":{doing:"生成中",done:"生成完成",failed:"生成失败",
-           btn:"在对话里查看",say:"看下刚生成的视频",
+           // ★ 不再放"在对话里查看"按钮（09-16）：成片现在就嵌在这块卡片里，
+           //   再让模型跑一轮 video.show 只会多出一张重复的卡。要重看/下载旧的，
+           //   直接说"把第 N 条视频放出来"即可（video.show 照旧在）。
+           btn:"",say:"",
            doneMsg:"视频已生成，可以直接播放或下载。",
-           // 生成完**当场就能播**，不必等模型再跑一轮。代价：这一块不在对话历史里
-           // （刷新就没了），所以它只是"顺手" —— 要留住的那张卡走 video.show。
+           // 成片嵌在这块卡片里当场就能播。★ 这块卡片是**随会话落库**的
+           // （见 RENDERERS.job 那段），所以刷新后它还在原位、成片也还在
+           // —— 不再是"当时能看、刷新就没"。
            doneHtml:s=>{const fid=((s&&s.artifacts)||[]).slice(-1)[0];
-             return fid?`<video class="vcard" controls preload="metadata"
-               src="/api/files/${encodeURIComponent(fid)}"></video>`:"";}},
+             if(!fid) return "";
+             const u="/api/files/"+encodeURIComponent(fid);
+             return `<video class="vcard" controls preload="metadata" playsinline
+               src="${u}"></video>
+               <div class="row" style="margin:6px 0 0"><a class="mini"
+                 style="text-decoration:none" href="${u}?dl=1" download="AI视频.mp4">下载 mp4</a></div>`;}},
   "_def":{doing:"处理中",done:"已完成",failed:"失败",btn:"",say:"",
           doneMsg:"任务已结束。",doneHtml:()=>""}
 };
@@ -1440,6 +1520,24 @@ async function pollJob(jobId, tid){
     }
   }catch(e){ delete _jobWatchers[jobId]; }
 }
+// 进度块卡片的内容：拉一次任务快照画出来；还在跑就接着轮询（跑完轮询自己停）。
+// ★ 卡片重画（刷新回放）也走这里 —— 所以"当时能看、刷新就没了"那条路被堵死了。
+async function fillJobCard(card){
+  const jobId=(card&&card.job_id)||""; if(!jobId) return;
+  // 记一笔"这块已经画过了"：下面那条"回合结束追画"的老路（archive 的识别还在用）
+  // 看到它就不会再画第二块。**打开会话时卡片先重画、watchThreadJob 后跑**，顺序刚好。
+  _jobShown[jobId]=true;
+  let snap=null;
+  try{ snap=await (await fetch(`/api/jobs/${jobId}`)).json(); }catch(e){ /* 下面按拿不到处理 */ }
+  const el=document.querySelector(`.prog[data-job="${jobId}"]`);
+  if(!el) return;                       // 卡片已经不在文档里了（切了会话）→ 什么都别做
+  if(!snap||snap.detail){               // 任务记录不在了（被清理过 / 编号对不上）
+    el.innerHTML='<div class="hint">这条任务的记录已经不在了。</div>'; return;
+  }
+  const going=jobGoing(snap);
+  setJobEl(jobId,snap,!going);          // 在跑 → 进度条；已结束 → 终态（成片就在里面）
+  if(going){ _jobWatchers[jobId]=true; pollJob(jobId,threadId); }
+}
 async function watchThreadJob(sd, showEnded){
   const jobId=sd&&sd.job_id, tid=threadId;
   if(!jobId||!tid||_jobShown[jobId]) return;
@@ -1454,7 +1552,12 @@ async function watchThreadJob(sd, showEnded){
     //    （09-14 用户实测报的："这种失败的时候没有进度条…影响用户判断"。）
     //    为什么不无条件画：重开一个几天前的旧会话时，底部会凭空冒出一块旧进度条，
     //    而它其实发生在后面的对话**之前** —— 那比不画更误导。
-    if(!going && !showEnded) return;
+    // ★ 一回合**以"等你批准"结束**时，不追画已经结束的进度块（09-16 加）：那一刻
+    //   会话里的 job_id 还是**上一个**任务，画出来就是"旧成片顶在新批准卡下面"——
+    //   用户报的"重新生成却把以前的视频调出来"正是这么来的（视频现在走卡片，
+    //   这里兜的是 archive 那类还没搬过来的进度块）。**在跑的任务不受影响**：
+    //   那股进度用户得看得见，照画。
+    if(!going && (!showEnded || (sd&&sd.pending))) return;
     _jobShown[jobId]=true;              // 画过就不再画（_jobWatchers 轮询结束会删，别混用）
     const d=document.createElement("div");
     d.className="prog"; d.dataset.job=jobId;
@@ -1835,6 +1938,203 @@ async function cfgReset(){
 $("#cfgAddSel").onchange=function(){ cfgAddPreset(this.value); this.value=""; };
 $("#cfgSaveBtn").onclick=()=>cfgSave();
 $("#cfgReset").onclick=cfgReset;
+
+// ── MCP 服务弹窗 ──────────────────────────────────────────────────────
+// 结构和服务端 station/mcp/config.py 的 view() 一致：
+//   servers[] 每项 = {id,label,transport,url,headers,builtin,tools[],tools_at,error}
+// ★ headers 回来的是**掩码版**（`Authorization: ••••`），提交时靠"动没动过"判断
+//   要不要带上这个字段（三态：不带=不改 / ""=清空 / 非空=覆盖）—— 见 mcpPayload()。
+let mcpData=null;      // 服务端回来的那份
+let mcpHeaders={};     // 服务id → 用户刚敲的请求头原文。★ 必须暂存：任何结构操作
+                       // （加/删卡片）都会重绘整块，不存就会被重绘冲掉、保存时静默丢失
+                       // （和模型配置弹窗的 cfgKeys 是同一个坑）
+
+// ★ 面板必须显成 flex —— 理由同 toggleConfig：三段布局靠 flex 才有钉住的底栏，
+//   这里写 "block" 会盖掉样式表里的 display:flex，保存按钮会被内容顶到看不见。
+function toggleMcp(show){
+  $("#mcpScrim").style.display=show?"block":"none";
+  $("#mcpPanel").style.display=show?"flex":"none";
+  if(show) mcpLoad();
+}
+
+// 提示语写在**保存按钮正上方**那条（同 cfgSay 的理由：用户滚到底部点保存，
+// 写在面板顶上的话早滚出屏幕了，体感就是"点了没反应"）。
+function mcpSay(html, isError){
+  const el=document.getElementById("mcpFootHint");
+  if(!el) return;
+  el.innerHTML=html;
+  if(isError) el.scrollIntoView({block:"nearest"});
+}
+
+async function mcpLoad(){
+  try{
+    mcpData=await (await fetch("/api/mcpconfig")).json();
+    mcpHeaders={};
+    mcpRender();
+    mcpSay("");
+  }catch(e){ mcpSay('<span class="cfgWarn">读取失败，请刷新后重试。</span>', true); }
+}
+
+function mcpRender(){
+  if(!mcpData) return;
+  $("#mcpList").innerHTML=(mcpData.servers||[]).map(mcpCard).join("");
+}
+
+// MCP 卡片里的一格：和服务端配置页的 cfgField 同形（标签 / 输入框 / 右侧常驻说明），
+// id 前缀用 mcps- 和模型配置的 cfgp- 区分开（同一个页面里两套表单并存）。
+function mcpField(id, key, label, value, ph, fh){
+  return '<label for="mcps-'+id+'-'+key+'">'+esc(label)+'</label>'
+    +'<input id="mcps-'+id+'-'+key+'" value="'+esc(value||"")+'" placeholder="'+esc(ph)+'">'
+    +'<em class="fh">'+esc(fh||"")+'</em>';
+}
+
+function mcpCard(s){
+  const id=esc(s.id);
+  const n=(s.tools||[]).length;
+  // 状态一句话：没连上过 / 上次失败 / 有几个工具
+  const state = n ? (n+" 个工具") : (s.error ? "上次连接失败" : "尚未连接");
+  const hdr = (mcpHeaders[s.id]!==undefined) ? mcpHeaders[s.id] : (s.headers||"");
+  return '<div class="cfgp">'
+    +'<div class="cfgp-h">'
+    +'<span class="dot '+(n?"ok":"warn")+'" title="'+esc(state)+'"></span>'
+    +'<b>'+esc(s.label||s.id)+'</b>'
+    +(s.builtin?'<span class="tag">内置</span>':'')
+    +'<span class="hint">· '+esc(state)+'</span>'
+    +'<span style="flex:1"></span>'
+    +'<button class="ghost mini" title="连上去看看它有哪些工具（会顺带刷新工具清单）" '
+      +'onclick="mcpTest(\''+id+'\')">'+(n?"刷新工具":"测试连接")+'</button>'
+    +(s.builtin?'':'<button class="ghost mini" title="删除此服务" onclick="mcpDel(\''+id+'\')">删除</button>')
+    +'</div>'
+    +'<div class="cfgp-body">'
+    +(s.error?'<div class="cfgp-note" style="color:var(--warn)">上次失败：'+esc(s.error)+'</div>':'')
+    +(s.builtin?'<div class="cfgp-note">随本站一起提供，不需要配置，也不能删除。</div>':'')
+    +'<div class="cfgp-grid">'
+    +(s.builtin?'':mcpField(id,'label','名称',s.label,"便于识别的名称，如「我的搜索服务」")
+      // 地址这一栏的说明是**常驻**的：占位符一填就没，用户填完就失去线索了
+      +mcpField(id,'url','接口地址',s.url,"服务方提供的 https:// 地址","通常以 /mcp 或 /sse 结尾")
+      +'<label for="mcps-'+id+'-transport">传输方式</label>'
+      +'<select id="mcps-'+id+'-transport">'
+      +(mcpData.transports||["http","sse"]).map(t=>
+          '<option value="'+esc(t)+'"'+(s.transport===t?' selected':'')+'>'+esc(t)+'</option>').join("")
+      +'</select><em class="fh">远端服务一般用 http</em>')
+    +'</div>'
+    +(s.builtin?'':'<div class="cfgp-key" style="align-items:flex-start">'
+      +'<label for="mcps-'+id+'-headers">请求头</label>'
+      +'<textarea id="mcps-'+id+'-headers" rows="2" spellcheck="false" placeholder="'
+      +esc("每行一条，如：Authorization: Bearer 你的密钥")+'">'+esc(hdr)+'</textarea></div>')
+    +mcpToolNote(s)
+    +'<div class="cfgt" id="mcpt-'+id+'"></div>'
+    +'</div></div>';
+}
+
+// 工具清单只读显示。★ 它是**服务端**在「测试连接」时拉回来存的，这里只负责画出来，
+//   绝不从表单提交 —— 那份清单决定"模型手上有什么武器"。
+function mcpToolNote(s){
+  const ts=s.tools||[];
+  if(!ts.length)
+    return '<div class="cfgp-note">还没连上过 —— 点右上角「测试连接」拉一次工具清单，'
+      +'拉到之后这些工具才会出现在对话里。</div>';
+  const names=ts.map(t=>t.title||t.name).join("、");
+  return '<div class="cfgp-note">对话里可用的工具：'+esc(names)+'</div>';
+}
+
+// 把输入框里的值读回 mcpData（结构变动前必调，否则重绘会丢掉刚敲的字）
+function mcpCollect(){
+  if(!mcpData) return;
+  (mcpData.servers||[]).forEach(s=>{
+    if(s.builtin) return;                       // 内置的没有可编辑字段
+    const g=i=>document.getElementById("mcps-"+s.id+"-"+i);
+    const l=g("label"),u=g("url"),t=g("transport"),h=g("headers");
+    if(l) s.label=l.value.trim();
+    if(u) s.url=u.value.trim();
+    if(t) s.transport=t.value;
+    if(h) mcpHeaders[s.id]=h.value;             // ★ 请求头一起收走，否则重绘就丢了
+  });
+}
+
+function mcpPayload(){
+  mcpCollect();
+  return {servers:(mcpData.servers||[]).filter(s=>!s.builtin).map(s=>{
+    const o={id:s.id,label:s.label,transport:s.transport,url:s.url};
+    // ★ 只有**动过**才提交 headers：不动就不带这个字段（服务端语义 = 沿用库里那份）。
+    //   少了这个判断，框里那串掩码（`••••`）会被当成真值存回去 —— 密钥当场变成四个点，
+    //   而界面上看着"配过了"，没有任何报错。整段删空 → now="" ≠ orig → 提交空串 = 清掉。
+    const orig=(s.headers||"");
+    const now=(mcpHeaders[s.id]!==undefined ? mcpHeaders[s.id] : orig);
+    if(now!==orig) o.headers=now;
+    return o;
+  })};
+}
+
+// 「＋ 添加服务」：加一张空卡。id 用随机后缀 —— 用户可以加好几个，固定 id 会互相顶掉。
+function mcpAdd(){
+  mcpCollect();
+  mcpData.servers.push({id:"mcp-"+Math.random().toString(16).slice(2,10),
+                        label:"",transport:"http",url:"",headers:"",
+                        builtin:false,tools:[],error:""});
+  mcpRender();
+  mcpSay('<span class="hint">填好名称和接口地址 → 点「保存」→ 再点卡片上的「测试连接」。</span>');
+}
+
+function mcpDel(sid){
+  mcpCollect();
+  mcpData.servers=(mcpData.servers||[]).filter(s=>s.id!==sid);
+  mcpRender();
+}
+
+async function mcpSave(silent){
+  if(!mcpData) return false;
+  const r=await fetch("/api/mcpconfig",{method:"PUT",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(mcpPayload())});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){
+    mcpSay('<span class="cfgWarn">保存失败：'+esc(d.detail||"服务端返回了错误")+'</span>', true);
+    return false;
+  }
+  mcpData=d; mcpHeaders={}; mcpRender();
+  // ★ 成功时**必须把上一次的提示清掉**：mcpTest 走的是静默保存，不清理的话，
+  //   "改好 → 测试连接成功"之后页脚还挂着上一轮的红色报错（真机上就是这么显示的：
+  //   卡片上写着"✓ 连上了"，底下却是一条"保存失败：…"，用户不知道该信哪个）。
+  mcpSay(silent ? "" : '<span class="res ok">已保存</span>');
+  return true;
+}
+
+async function mcpTest(sid){
+  // ★ 每次用 id **现取**元素：mcpSave() 内部会重绘整块，事先抓到的节点会变成孤儿
+  //   ——写上去等于没写，用户看到的是"点了按钮毫无反应"（模型配置那边踩过同一个坑）。
+  const say=html=>{ const el=document.getElementById("mcpt-"+sid); if(el) el.innerHTML=html; };
+  say('<span class="hint">正在连接……</span>');
+  if(!await mcpSave(true)){ say('<span class="res bad">请先修正标记的问题</span>'); return; }
+  say('<span class="hint">正在连接……</span>');
+  let d={};
+  try{
+    const r=await fetch("/api/mcpconfig/test",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({server_id:sid})});
+    d=await r.json().catch(()=>({}));
+  }catch(e){ d={ok:false,error:"请求未发出，请确认服务是否正在运行"}; }
+  const msg = d.ok
+    ? '<span class="res ok">✓ 连上了 · 发现 '+(d.tools||[]).length+' 个工具 · '+(d.ms||0)+' ms</span>'
+    : '<span class="res bad">✕ '+esc(d.error||d.detail||"连接失败")+'</span>';
+  // 工具清单变了 → 重新拉一份并重绘。★ 重绘会把结果条清空（那是新建的元素），
+  //   所以**先重绘、再写结果**，顺序反了用户就什么都看不到。
+  try{ mcpData=await (await fetch("/api/mcpconfig")).json(); mcpHeaders={}; mcpRender(); }
+  catch(e){}
+  say(msg);
+}
+
+async function mcpReset(){
+  try{
+    mcpData=await (await fetch("/api/mcpconfig",{method:"DELETE"})).json();
+    mcpHeaders={}; mcpRender();
+    mcpSay('<span class="res ok">已清空你配的服务（内置的不受影响）</span>');
+  }catch(e){ mcpSay('<span class="cfgWarn">清空失败，请重试。</span>', true); }
+}
+
+// ★ 一律箭头函数：直接 `onclick=mcpSave` 会把点击事件对象当成第一个参数传进去，
+//   正好命中 mcpSave(silent) —— 于是"手动点保存"变成静默保存、提示语永不出现。
+$("#mcpAddBtn").onclick=()=>mcpAdd();
+$("#mcpSaveBtn").onclick=()=>mcpSave();
+$("#mcpReset").onclick=()=>mcpReset();
 
 $("#btnNew").onclick=()=>newChat();
 $("#btnNewSide").onclick=()=>newChat();

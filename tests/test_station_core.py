@@ -127,6 +127,54 @@ def test_l1_routes_video_phrases():
     assert l1_route("帮我写周报", ids).skill_id == "weekly-report"
 
 
+def test_active_skill_is_not_stolen_by_generic_words():
+    """★★ 回归 09-14 用户实测的真 bug：一条**视频**线程里说"我重新上传照片"，
+    被档案的词表抢走 —— 抢走的后果不只是答非所问：**技能一换、工具集跟着换**，
+    `video.ask_photo` 当场从模型手上消失，它只能反复调 remember/recall 兜圈子
+    （实测一整轮 14 次调用全是记忆工具，一件事没办成）。
+
+    用例直接用**当时那几句话**。
+    """
+    from station.core.router import may_switch_to
+    for t in ("重新生成一个，我重新上传照片",
+              "你让我上传新照片啊",
+              "给我上传的框子啊"):
+        assert not may_switch_to(t, "archive", "video"), f"这句又被抢走了：{t}"
+
+
+def test_explicit_switch_still_works():
+    """用户**真的**要做另一件事时，照样切得过去（闸不能变成"永远不切"）。"""
+    from station.core.router import may_switch_to
+    for t in ("帮我整理这卷干部档案", "把这份翻拍照片建成卷",
+              "看看材料清单", "出件吧"):
+        assert may_switch_to(t, "archive", "video"), f"这句该切过去：{t}"
+    assert may_switch_to("帮我写周报", "weekly-report", "video")
+
+
+def test_switch_guard_does_not_block_first_entry():
+    """没有活跃技能时（新会话的第一步）**不限制** —— 否则永远进不去那个技能。"""
+    from station.core.router import may_switch_to
+    for t in ("上传照片", "选照片", "做个视频"):
+        assert may_switch_to(t, "archive", "")
+        assert may_switch_to(t, "video", "")
+
+
+def test_unregistered_skill_is_not_restricted():
+    """没登记切换词根的技能不限制 —— 宁可新技能好使，也不要它因为漏登记而不响应。"""
+    from station.core.router import may_switch_to
+    assert may_switch_to("随便说点什么", "还没有的新技能", "video")
+
+
+def test_server_actually_applies_the_switch_guard():
+    """粗粒度护栏：server 里**真的调了**那道闸。
+
+    规则写在 router 里、闸装在 server 里，少装一处这条规则就只是摆设 ——
+    而"没装"的表现是"路由偶尔抢走线程"，不会有任何报错。
+    """
+    src = (config.REPO / "src/station/app/server.py").read_text(encoding="utf-8")
+    assert "may_switch_to(body.message" in src, "server 没有应用「别抢正在做的事」那道闸"
+
+
 def test_index_html_knows_video_card_and_slot():
     """粗粒度源码护栏：前端忘了接视频这套东西时，症状是**静默降级**（卡片显示
     "未知卡片类型"、进度面板写着"识别完成"），不报错不崩 —— 只能扫源码钉住。
@@ -355,6 +403,152 @@ def test_agent_tool_loop():
     tool_ev = next(e for e in events if e.type == EV_TOOL)   # 找到那次工具事件
     assert tool_ev.data["names"] == ["demo.now"]    # 调的是命名空间后的 demo.now
     assert thread.msgs[-1]["role"] == "assistant"   # 最终答复已写回历史
+
+
+class _RecordingModel:
+    """假模型：把每次被喂的**系统提示**记下来，然后一句收尾（不再调工具）。"""
+
+    def __init__(self):
+        self.systems: list[str] = []
+
+    def stream(self, msgs, tools=None):
+        head = msgs[0] if msgs else {}
+        self.systems.append(head.get("content") or "" if head.get("role") == "system" else "")
+        yield {"final": {"content": "好", "tool_calls": []}}
+
+
+def _thread_with_job(status: str, **kw) -> object:
+    """造一个"会话上挂着某个后台任务"的现场（任务真落库，走 get() 的磁盘兜底那条路）。"""
+    from station.jobs.manager import Job
+    job = Job("video", {})
+    job.update(status=status, **kw)
+    if status == "done":
+        job.append({"type": "artifact", "id": "f1"})
+    thread = Thread(skill_id="demo-agent")
+    thread.meta["job_id"] = job.id
+    return thread
+
+
+def test_finished_job_is_told_to_the_model():
+    """★★ 用户报的 bug：视频生成完成了，可会话（模型）还不知道，还在说"还在跑"。
+
+    根子在宿主：任务跑在 JobManager 里，以前**只有前端**在轮询 `/api/jobs/{id}`，
+    模型每轮能看见的只有历史里那句"开始生成了，预计几分钟" —— 它没有时间感，
+    只会照旧话续。所以宿主得每轮把**任务现状**主动告诉它。
+
+    这条测的就是"真的插进系统提示了"（只测 jobs_note 的返回值不够：
+    拼装那一步漏了，等于没修）。
+    """
+    from station.core.agent import jobs_note, run_agent
+    skill = get_registry().get("demo-agent")
+    thread = _thread_with_job("done", message="完成")
+
+    assert "已经完成" in jobs_note(thread)            # 单件：状态文案对
+
+    ctx = Context(thread=thread, skill_id=skill.id,
+                  data_dir=config.sub("skills", skill.id))
+    ctx.system = "（岗位须知）"                       # 技能自己的系统提示词，必须保留
+    model = _RecordingModel()
+    list(run_agent(ctx, thread, skill, model))
+    sent = model.systems[0]
+    assert "（岗位须知）" in sent, "技能的岗位须知被顶掉了"
+    assert "【后台任务现状】" in sent and "已经完成" in sent, (
+        f"任务已完成这件事没有告诉模型 —— 它还会说'还在跑'：\n{sent}")
+    # ★ 而且**不能落进历史**：落了的话下一轮又变成一条过期的"已完成"，
+    #   模型照样会拿它当新事实说（这条与"system 每次现插"是同一个道理）。
+    assert not any("【后台任务现状】" in (m.get("content") or "")
+                   for m in thread.msgs), "任务现状被写进历史了，会变成过期副本"
+
+
+def test_running_and_failed_jobs_are_reported_truthfully():
+    """没跑完说"进行中"、失败了说"失败" —— 别让模型自己猜。"""
+    from station.core.agent import jobs_note
+    running = _thread_with_job("running", message="排队中")
+    assert "仍在进行中" in jobs_note(running)
+
+    failed = _thread_with_job("failed", message="对端拒绝了")
+    note = jobs_note(failed)
+    assert "失败" in note and "对端拒绝了" in note
+
+
+def test_no_job_means_no_note():
+    """会话上没有任务时**什么都不加**（别凭空多一段，白占上下文）。"""
+    from station.core.agent import jobs_note
+    assert jobs_note(Thread(skill_id="demo-agent")) == ""
+    # 任务号是旧的/查不到 → 也安静地不加（宁可没这条，也不能让对话起不来）
+    t = Thread(skill_id="demo-agent")
+    t.meta["job_id"] = "不存在的任务号"
+    assert jobs_note(t) == ""
+
+
+class _ToolSpam:
+    """假模型：连着 N 轮都要求调同一个工具（模拟"打转"）。"""
+
+    def __init__(self, name: str, times: int = 6):
+        self.name, self.times, self.n = name, times, 0
+
+    def stream(self, msgs, tools=None):
+        self.n += 1
+        if self.n <= self.times:
+            yield {"final": {"content": "", "tool_calls": [
+                {"id": f"c{self.n}", "name": self.name, "arguments": {}}]}}
+        else:
+            yield {"final": {"content": "好了", "tool_calls": []}}
+
+
+def test_global_tools_are_capped_per_turn():
+    """★ 全局工具一轮里最多**执行** N 次 —— 防模型"打转"。
+
+    09-14 用户实测：模型在"手上的工具做不到用户要的事"时，一轮里把
+    remember/recall/skills 调了 14 次兜圈子，用户干等什么都拿不到。
+    这种打转**没有异常、也没有日志**，光靠提示词挡不住，得有代码兜。
+    """
+    from station.core import agent as _agent
+    skill = get_registry().get("demo-agent")
+    ctx, thread, _ = _ctx(skill)
+    thread.add_user("随便说点什么")
+    _run(ctx, thread, skill, _ToolSpam("station.recall", times=6))
+
+    tool_msgs = [m for m in thread.msgs if m.get("role") == "tool"]
+    assert len(tool_msgs) == 6, "模型确实请求了 6 次"
+    executed = [m for m in tool_msgs if "先停下" not in m["content"]]
+    capped = [m for m in tool_msgs if "先停下" in m["content"]]
+    assert len(executed) == _agent._GLOBAL_TOOL_CAP, \
+        f"只该真执行 {_agent._GLOBAL_TOOL_CAP} 次，实际 {len(executed)}"
+    assert len(capped) == 6 - _agent._GLOBAL_TOOL_CAP
+    # 超限那句要说清"这不会改变你手上的工具" —— 否则模型只会换个工具接着试
+    assert "不会改变你手上的工具" in capped[0]["content"]
+
+
+def test_business_tools_are_not_capped():
+    """★ 业务工具**不受**这个上限 —— 它们有正当的批量场景（一口气改几份材料的类别）。
+
+    这条是上一条的刹车：要是哪天有人把上限做成"对所有工具生效"，正常流程会当场坏掉。
+    """
+    skill = get_registry().get("demo-agent")
+    ctx, thread, _ = _ctx(skill)
+    thread.add_user("反复 echo")
+    _run(ctx, thread, skill, _ToolSpam("demo.echo", times=6))
+    tool_msgs = [m for m in thread.msgs if m.get("role") == "tool"]
+    assert len(tool_msgs) == 6
+    assert all("先停下" not in m["content"] for m in tool_msgs), "业务工具被误伤了"
+
+
+def test_memory_descriptions_do_not_invite_over_use():
+    """★ 描述是"会不会被调"的直接原因（09-14 用户反馈"太容易触发"）。
+
+    原话是「**回答用户问题前**……先调它看看有没有相关约定」—— 那等于叫模型**每轮都查**。
+    用户的原话："很多时候我觉得不应该调用它，但是就调用了。"
+    用断言钉住措辞，别哪天又写回去。
+    """
+    # 用 all_tools()（带命名空间）而不是 memory.tools() —— 后者是裸叶子名，
+    # 而"模型看到的"是加过前缀的那份，测就该测它看到的东西。
+    from station.tools import all_tools
+    d = {t.name: (t.description or "") for t in all_tools()}
+    assert "回答用户问题前" not in d["station.recall"], "又写成「回答前先调」了"
+    assert "不要每轮都调" in d["station.recall"]
+    assert "用户明确要求" in d["station.remember"], "要写清「只在用户明确要求时记」"
+    assert "草稿纸" in d["station.remember"], "要写清它不是模型自己的笔记"
 
 
 def test_long_sentence_is_not_an_approval():

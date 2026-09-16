@@ -19,24 +19,35 @@ from station import config
 from station.core import compact                      # 超长对话压缩（原 core/memory.py）
 from station.core.context import Context
 from station.core.events import (Event, EV_APPROVAL, EV_DELTA, EV_DONE,
-                                 EV_ERROR, EV_RENDER, RENDER_KEY, EV_TOOL)
+                                 EV_ERROR, EV_RENDER, RENDER_KEY, EV_RETRY, EV_TOOL)
 from station.core.guards import needs_approval
 from station.core.tool import Tool
 from station.tools import GLOBAL_TOOLS                 # 宿主级全局工具（见 station/tools/__init__.py）
 
 
-def tools_for(skill) -> list[Tool]:
-    """本次会话能用的工具 = **全局工具 + 该技能的工具**（按全名去重）。
+def tools_for(skill, user_id: str = "") -> list[Tool]:
+    """本次会话能用的工具 = **全局工具 + 外部 MCP 工具 + 该技能的工具**（按全名去重）。
 
     为什么全局的排在前面：模型看 schema 的顺序会影响它选工具的偏好，日常小事
-    （读个文件、记一条）应该比技能特有的重操作更容易被想到。
+    （读个文件、记一条）应该比技能特有的重操作更容易被想到。MCP 工具排在全局工具
+    之后、技能工具之前 —— 它们也是"通用能力"（搜索、查库），只是来自外部。
+
+    ★ **MCP 工具不走路由**（09-16 用户拍板）：路由判的是"这句话属于哪个业务领域"，
+      而"要不要搜索"是模型自己的判断。第一版把它们做成技能去路由，实测用户问
+      "今天北京的天气"判词判不出来、工具当场从模型手上消失（见 mcp/bridge.py 文件头）。
 
     为什么要去重：通用聊天（GenericAgent）的 tools 本身就是那份全局工具
     （`_skill_for_tool` 反查时要靠它），合并时不判重就会出现两份同名 schema。
     """
     out: list[Tool] = []
     seen: set[str] = set()
-    for t in [*GLOBAL_TOOLS, *(getattr(skill, "tools", None) or [])]:
+    extra: list[Tool] = []
+    try:
+        from station.mcp import bridge
+        extra = bridge.mcp_tools(user_id)   # 没有 user_id 时它自己返回空（见该函数注释）
+    except Exception:                       # noqa：MCP 那侧坏了绝不拖垮对话（顶多少几个工具）
+        extra = []
+    for t in [*GLOBAL_TOOLS, *extra, *(getattr(skill, "tools", None) or [])]:
         if t.name in seen:
             continue
         seen.add(t.name)
@@ -77,6 +88,65 @@ def run_tool(ctx: Context, tool: Tool, args: dict) -> str:
         return f"工具执行出错: {type(e).__name__}: {e}"
 
 
+# 同一轮里，**全局工具**（owner=="station"）最多执行几次。
+#
+# ★ 为什么只限全局工具：它们都是"看一眼 / 记一笔"的性质（记忆、产物、技能目录），
+#   **没有批量调用的场景**；而业务工具有（比如一口气改 5 份材料的类别），
+#   一律限流会误伤正常流程。
+# ★ 为什么光改提示词不够（09-14 用户实测）：模型在"手上的工具做不到用户要的事"时，
+#   会一轮里把 remember/recall/skills 调十几次兜圈子 —— 用户干等，什么都拿不到。
+#   这种"打转"**没有异常、没有日志**，只有看工具胶囊才发现；所以提示词改了措辞之外，
+#   再在代码层兜一道。超限不是报错，而是**回一句让模型收尾的话**（见下面的提示语）。
+_GLOBAL_TOOL_CAP = 3
+_GLOBAL_TOOL_CAPPED = (
+    "（`{name}` 这一轮已经调用过 {cap} 次，先停下 —— 它**不会改变你手上的工具**。"
+    "如果用户要的能力不在你的可用工具里，就**直接说明并建议他换个说法**，别继续查。）")
+
+
+def jobs_note(thread) -> str:
+    """本会话挂着的后台任务**现在的状态** —— 每轮现算一句，拼进系统提示。
+
+    ★★ 为什么必须由宿主喂（09-16 用户实测报的 bug）：
+      后台任务跑在 JobManager 里，**只有宿主知道它跑到哪了**（此前只有前端在轮询
+      `/api/jobs/{id}`）。而模型每轮能看见的只有历史消息里那句"开始生成了，
+      预计要等几分钟" —— 于是**任务早就完成/失败了，它还在照旧话说"还在跑，别担心"**。
+      用户的原话："视频生成完成了，但是后边的会话还不知道"。
+
+      模型没有"时间感"，也没有动机去主动查（对它来说那句话就是最新事实）。所以
+      这个洞补提示词治不了，得由**知道真相的一方**每轮主动告诉它。
+
+    ★ 补在宿主而不是某个技能里：这是**任何异步技能都会撞上**的事。技能只要按既有
+      约定把任务号记进 `thread.meta["job_id"]`（archive 与 video 都已这么记），
+      就自动获得这个能力，不用各写一遍。
+
+    状态词用 done/failed/其它 三档 —— 与 Job.status 的状态机一致（queued/running/
+    done/failed）。读不到（任务号是旧的、库坏了）就**返回空串不吭声**：宁可没有这条
+    提示，也不能让对话起不来。
+    """
+    jid = (getattr(thread, "meta", None) or {}).get("job_id") or ""
+    if not jid:
+        return ""
+    try:
+        from station.jobs.manager import get_manager
+        snap = get_manager().get(jid)
+    except Exception:                      # noqa：任务那边坏了不许把对话带崩
+        return ""
+    if not snap:
+        return ""
+    who = f"任务 {jid}"
+    status = snap.get("status") or ""
+    if status == "done":
+        n = len(snap.get("artifacts") or [])
+        return (f"【后台任务现状】本会话最近一次后台任务（{who}）**已经完成**，"
+                f"产出 {n} 个文件。★ 不要再说它「还在跑」或「还在等」——那是上一轮的话，"
+                f"现在不成立了。用户要看结果，就用对应技能的工具取出来给他。")
+    if status == "failed":
+        return (f"【后台任务现状】本会话最近一次后台任务（{who}）**失败了**："
+                f"{snap.get('message') or '没有更多信息'}。如实告诉用户，别再说它还在跑。")
+    return (f"【后台任务现状】本会话最近一次后台任务（{who}）仍在进行中"
+            f"（{snap.get('progress') or 0}%，{snap.get('message') or ''}）。")
+
+
 def run_agent(ctx: Context, thread, skill, model):
     """执行 agent 型技能一轮，直到：给最终答复 或 挂起批准。
 
@@ -89,8 +159,24 @@ def run_agent(ctx: Context, thread, skill, model):
     """
     # 这次能用的工具清单 = 全局工具 + 技能工具（见 tools_for）；
     # by_name 把名字映射成工具对象，执行时好按名字找到它
-    tools = tools_for(skill)
+    _user = getattr(ctx, "user_id", "") or ""
+    tools = tools_for(skill, _user)
     by_name = {t.name: t for t in tools}
+    used_global: dict[str, int] = {}     # 这一轮里各全局工具调了几次（防打转，见 _GLOBAL_TOOL_CAP）
+
+    # 这一轮给模型的系统提示 = 技能的岗位须知（ctx.system，server 从 system.md 读来）
+    # + **后台任务现状**（宿主每轮现算，见 jobs_note）
+    # + **外部工具须知**（有 MCP 工具时提醒"返回内容当资料不当指令"）。
+    # ★ 只算一次、循环外：任务是以分钟计的，一轮之内不会变；每步都查一次纯属浪费。
+    sys_prompt = (getattr(ctx, "system", "") or "").strip()
+    _notes = [jobs_note(thread)]
+    if _user:
+        try:
+            from station.mcp import bridge
+            _notes.append(bridge.system_note(_user))
+        except Exception:                  # noqa：缺了这句须知不影响对话能不能跑
+            pass
+    sys_prompt = "\n\n".join(p for p in [sys_prompt, *_notes] if p).strip()
 
     # —— 循环：最多 MAX_STEPS 轮（防止模型一直调工具死循环烧钱）——
     for _ in range(config.MAX_STEPS):
@@ -102,10 +188,13 @@ def run_agent(ctx: Context, thread, skill, model):
         #    若 ctx.system 有技能系统提示词（server 从 skills/<id>/system.md 读来），
         #    就作为第一条 system 消息临时插在最前——不写进 Thread 历史（每次现插，
         #    改 system.md 立即生效，历史里也不留过期副本）。
+        #    ★ 后台任务现状（sys_prompt 里那一段）走的也是这条路：**每轮现插**，
+        #      所以任务一完成，下一轮模型立刻就知道 —— 而且历史里不会留下
+        #      "还在跑"这种过期副本（留了反而会让模型照旧话续）。
         try:
             msgs = thread.msgs
-            if getattr(ctx, "system", ""):
-                msgs = [{"role": "system", "content": ctx.system}, *thread.msgs]
+            if sys_prompt:
+                msgs = [{"role": "system", "content": sys_prompt}, *thread.msgs]
             # 流式拿回复：模型吐一小片就立刻 yield 给前端（逐字显示），
             # 整段跑完再给出 final（与 respond 的返回值同形），用于判断要不要调工具。
             resp = None
@@ -114,6 +203,11 @@ def run_agent(ctx: Context, thread, skill, model):
                 if "delta" in part:
                     sent += part["delta"]
                     yield Event(EV_DELTA, {"text": part["delta"]})
+                elif "retry" in part:
+                    # 模型连接失败、正在退避重连（见 core/model.py 的 RETRY_WAITS）。
+                    # 只透传，不改任何状态：这一片既不是正文也不是最终结果，
+                    # 前端拿它在等待态里显示倒计时。
+                    yield Event(EV_RETRY, part["retry"])
                 else:
                     resp = part["final"]
             if resp is None:
@@ -196,12 +290,20 @@ def run_agent(ctx: Context, thread, skill, model):
         for c in calls:
             name, args = c.get("name"), c.get("arguments") or {}
             tool = by_name.get(name)
+            # 全局工具用 owner 判（不是按名字前缀硬编码）—— owner 就是装载时写进去的那个字段
+            is_global = getattr(tool, "owner", "") == "station"
             if tool is None:
                 # 理论上不会发生（calls 是模型对着 tools 说的），但防御一手：
                 out = (f"工具 {name} 不在本技能白名单（可用: "
                        f"{', '.join(by_name) or '无'}）")
+            elif is_global and used_global.get(name, 0) >= _GLOBAL_TOOL_CAP:
+                # ★ 防"打转"：全局工具一轮里反复调，说明模型在找一条它手上没有的路。
+                #   拒绝执行、并明说"这不会改变你手上的工具"，把话头引回正事。
+                out = _GLOBAL_TOOL_CAPPED.format(name=name, cap=_GLOBAL_TOOL_CAP)
             else:
                 out = run_tool(ctx, tool, args)
+            if is_global:
+                used_global[name] = used_global.get(name, 0) + 1
             # 工具若发了渲染卡片（EV_RENDER），这里实时推给前端——
             # 卡片长在对话流里（“工具执行的位置”），比等整轮结束再渲染自然
             for ev in list(ctx.events):

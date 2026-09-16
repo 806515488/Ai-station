@@ -45,7 +45,8 @@ from station import config, db
 from station.core import guards
 from station.core.agent import run_agent, run_tool  # 大脑循环 + 执行单个工具
 from station.core.context import Context
-from station.core.router import l1_route, l2_route, log_route  # 三层意图漏斗 + 路由日志
+from station.core.router import (l1_route, l2_route, log_route,  # 三层意图漏斗 + 路由日志
+                                 may_switch_to)                  # "别抢正在做的事"那条闸
 from station.core.session import Thread
 from station.jobs.manager import get_manager
 from station.skills.registry import get_registry
@@ -157,35 +158,57 @@ def _skill_for_tool(tool_name: str):
     ★ 这条不能不写：返回 None 的话会退回一个没有该工具的 agent，用户回了"允许"
       却什么都不会发生（静默失败，最难查的那种）。现在 4 个全局工具**都不是**
       approve 类，但分支保留着 —— 哪天加回一个危险工具，这条不能少。
+
+    ★ 匹配规则是**最长命名空间前缀**，不是"取第一个点前面那段"。后者在命名空间本身
+      含点时会判给错误（乃至不存在的）技能 → 反查返回 None → **用户点了"允许"却什么都
+      不发生**。现在没有这种技能，但写成通用的更不容易在将来踩坑（有测试钉着）。
     """
-    ns = (tool_name or "").split(".", 1)[0]
-    if not ns:
+    name = str(tool_name or "")
+    if not name:
         return None
-    if ns == "station":
+    if name.split(".", 1)[0] == "station":
         return build_generic_agent()
+    best = None
     for s in get_registry().list():
-        if s.ns == ns:
-            return s
-    return None
+        ns = getattr(s, "ns", "") or ""
+        if ns and (name == ns or name.startswith(ns + ".")):
+            if best is None or len(ns) > len(best.ns or ""):
+                best = s
+    return best
 
 
-def _tool_label(tool_name: str) -> str:
+def _tool_label(tool_name: str, user_id: str = "") -> str:
     """工具全名 → **给人看的一句话**（工具在 Tool.label 里声明的）；查不到给空串。
 
     历史回放需要它：thread 里只存了工具名，而"该怎么跟用户说"是**工具自己**的事
     （宿主不认识业务），所以回注册表问一遍。空串时前端退回显示工具叶子名。
     """
-    leaf = str(tool_name).split(".", 1)[-1]
     # 全局工具先查（它们不在技能注册表里）
     from station.tools import GLOBAL_TOOLS
     for t in GLOBAL_TOOLS:
         if t.name == tool_name:
             return getattr(t, "label", "") or ""
+    # ★ 外部 MCP 工具（mcp.* 开头）也不属于任何技能 —— 它们是「每轮都在手上」的那类，
+    #   每人一份现算（见 mcp/bridge.py）。查不到就算了，前端会退回显示叶子名。
+    if user_id:
+        try:
+            from station.mcp import bridge
+            for t in bridge.mcp_tools(user_id):
+                if t.name == tool_name:
+                    return getattr(t, "label", "") or ""
+        except Exception:                  # noqa：查个显示名而已，坏了不该影响回放
+            pass
     s = _skill_for_tool(tool_name)
     if s is None:
         return ""
+    # ★ 按**完整名**比，别按"第一个点后面的那串"（09-16 改）。
+    #   老写法 `str(tool_name).split(".", 1)[-1]` 在单段命名空间下等于叶子名，
+    #   但 `mcp.a.b.search` 会取成 `a.b.search`，跟 `t.leaf()` 的 `search` 对不上
+    #   → 永远返回空串 → 历史回放里那一行显示成内部工具名（用户看不懂）。
+    #   历史里可能存着裸叶子名，所以再兜一层按叶子名比。
+    leaf = str(tool_name).rsplit(".", 1)[-1]
     for t in (getattr(s, "tools", None) or []):
-        if t.leaf() == leaf:
+        if t.name == tool_name or t.leaf() == leaf:
             return getattr(t, "label", "") or ""
     return ""
 
@@ -334,7 +357,12 @@ def test_model_config(body: ProviderTestIn, request: Request):
                 "hint": modelcfg.PROBE_NOT_CHAT[hit_slot]}
     t0 = time.perf_counter()
     try:
-        from langchain_openai import ChatOpenAI
+        # 走 import_chat_openai（与 core/model.py 共用一把锁、同一份缓存）：
+        # 首次导入必须串行化，否则这里可能与对话/识别同时撞上"首次并发 import"竞态。
+        # ★ 这个探针**刻意不套退避重试**：用户手点的"测试连接"应该立刻说真话，
+        #   让他等 31 秒才看到"连不上"只会以为界面卡了。
+        from station.core.model import import_chat_openai
+        ChatOpenAI = import_chat_openai()
         llm = ChatOpenAI(model=model, api_key=key, base_url=url or None,
                          temperature=0, timeout=8, max_retries=0, max_tokens=1)
         llm.invoke([{"role": "user", "content": "hi"}])
@@ -343,6 +371,99 @@ def test_model_config(body: ProviderTestIn, request: Request):
         name = type(e).__name__
         return {"ok": False, "error": name, "hint": _err_hint(name),
                 "ms": int((time.perf_counter() - t0) * 1000)}
+
+
+# ── MCP 服务（每人一份：用户自己配的远端 MCP；内置的写死在代码里）─────────
+# 为什么有这一组：把外部 MCP server 的工具接进对话（见 station/mcp/）。
+# ★ 注意"用户能配什么"：**只允许 http / sse 两种传输，配不了 stdio**。stdio 意味着
+#   在服务器上起进程，而这个站公网可达 —— 放开它等于给任意注册用户一个 RCE 端点。
+#   白名单卡在 station/mcp/config.py 的 _validate 里，且有测试钉着。
+# ★ 界面上那一栏是唯一调用方（同本仓"没有调用方的端点就该删"的规矩），
+#   所以这组端点和 static/index.html 的「MCP 服务」弹窗是**同批**加的。
+
+class McpConfigIn(BaseModel):
+    """保存用户配的 MCP 服务清单（整包覆盖，同模型配置）。"""
+    servers: list = []
+
+
+class McpTestIn(BaseModel):
+    """「测试连接」只认**已经保存过**的服务 id，不接裸地址。
+
+    同 /api/modelconfig/test 的理由：不然这个端点就成了一个"让服务器替我请求任意
+    URL"的通用跳板（SSRF 面）。必须先落库，校验才拦得住。
+    """
+    server_id: str
+
+
+def _mcp_payload(user: dict) -> dict:
+    """回给界面的那一份（请求头只回"配过哪些名字"，值一律掩码）。"""
+    from station.mcp import config as mcfg
+    d = mcfg.view(user["id"])
+    return {"servers": d["servers"], "max": d["max"],
+            "transports": d["transports"]}
+
+
+@app.get("/api/mcpconfig")
+def get_mcp_config(request: Request):
+    """列出：内置的（只读）+ 本人配的（含上次连上看到的工具清单）。"""
+    return _mcp_payload(require_user(request))
+
+
+@app.put("/api/mcpconfig")
+def put_mcp_config(body: McpConfigIn, request: Request):
+    """保存本人配的 MCP 服务。校验不过回 400 + **人话**问题清单。"""
+    u = require_user(request)
+    from station.mcp import config as mcfg
+    try:
+        mcfg.save_servers(u["id"], body.servers)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _mcp_payload(u)
+
+
+@app.delete("/api/mcpconfig")
+def delete_mcp_config(request: Request):
+    """清空本人配的 MCP 服务（**内置的不受影响** —— 它们不在库里）。"""
+    u = require_user(request)
+    from station.mcp import config as mcfg
+    mcfg.delete_servers(u["id"])
+    return _mcp_payload(u)
+
+
+@app.post("/api/mcpconfig/test")
+def test_mcp_config(body: McpTestIn, request: Request):
+    """「测试连接」：连上去、握手、问它有哪些工具，并把清单缓存下来。
+
+    ★ 这是工具清单**唯一的写入口**。别处（尤其前端）提交的工具清单一律不认 ——
+      那份清单决定"模型手上有什么武器"。
+    """
+    u = require_user(request)
+    if not _test_allowed(u["id"]):
+        raise HTTPException(429, "测试过于频繁，请稍后重试")
+    from station.mcp import client as mcli
+    from station.mcp import config as mcfg
+    spec = mcfg.find(u["id"], body.server_id)
+    if spec is None:
+        raise HTTPException(404, "没有这个 MCP 服务")
+
+    # SSRF 防护：地址是用户填的，而请求由**服务器**发出。和模型配置那个探针同一套黑名单
+    # （云元数据地址一律拒）。★ 内网/回环地址这里**不拦** —— 沿用既有口径（本地起的服务
+    # 是正当用法），这条边界记在 docs/conventions.md 的 MCP 一节里。
+    if spec.transport in ("http", "sse"):
+        from urllib.parse import urlparse
+        host = (urlparse(spec.url).hostname or "").lower()
+        if host in _BLOCKED_HOSTS or host.startswith("169.254."):
+            raise HTTPException(400, "该地址不允许测试")
+
+    t0 = time.perf_counter()
+    tools, err = mcli.probe(spec)
+    ms = int((time.perf_counter() - t0) * 1000)
+    if not spec.builtin:                 # 内置的不落库（它们在代码里，不归用户配置管）
+        mcfg.set_cache(u["id"], spec.id, tools, err)
+    if err:
+        # 失败也照 200 回：这不是"服务端错误"，是"对端连不上"，界面上要显示这句话。
+        return {"ok": False, "error": err, "ms": ms, "tools": []}
+    return {"ok": True, "ms": ms, "tools": tools}
 
 
 # ── 客户端照片上传（archive 的 photos_dir 用；用户在自己电脑选照片）────
@@ -433,20 +554,20 @@ def session_detail(tid: str, request: Request):
     if t is None or getattr(t, "user_id", "") != u["id"]:
         raise HTTPException(404, "会话不存在")   # 抛 404 ≈ Java 里抛特定异常→框架转成 HTTP 状态码
     meta = t.meta or {}
-    view = _replay_items(t.msgs, meta.get("cards") or [])
+    view = _replay_items(t.msgs, meta.get("cards") or [], u["id"])
     # ★ pending 要带上 **label**：刷新页面时前端要重画那张批准卡，而卡片上显示的是
     #   人话标签不是内部工具名 —— 不带的话重画出来又是 `archive.xxx`（或者干脆画不出来，
     #   用户会卡在"agent 在等允许、屏幕上什么都没有"）。
     pend = t.pending
     if pend:
-        pend = {**pend, "label": _tool_label(pend.get("tool") or "")}
+        pend = {**pend, "label": _tool_label(pend.get("tool") or "", u["id"])}
     return {"id": t.id, "skill_id": t.skill_id, "msgs": view,
             "pending": pend,
             "job_id": meta.get("job_id") or "",
             "cards": meta.get("cards") or []}
 
 
-def _replay_items(msgs: list, cards: list) -> list:
+def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
     """按“真实发生顺序”把文本/工具事件/卡片交错成回放列表。
 
     原始 thread.msgs 是给模型看的（user/assistant/tool 消息），而页面还出现过
@@ -470,7 +591,7 @@ def _replay_items(msgs: list, cards: list) -> list:
                 # 渲染函数。以前这里和前端各拼一份"→ 调用工具：…"，改一处忘一处。
                 items.append({"role": "tool", "content": "", "tool_call": {
                     "names": [str(c.get("name")) for c in calls],
-                    "labels": [_tool_label(str(c.get("name"))) for c in calls],
+                    "labels": [_tool_label(str(c.get("name")), user_id) for c in calls],
                     "args": [c.get("arguments") or {} for c in calls]}})
         elif role in ("user", "assistant") and content:
             items.append({"role": role, "content": content})
@@ -613,12 +734,18 @@ async def chat(body: ChatIn, request: Request):
         #   完全没命中但有活跃技能 → 续用活跃技能（同一会话里的“继续”）。
         if agent is None:
             sid = route.skill_id if route else ""
+            active = (thread.meta or {}).get("active_skill", "")
+            # ★★ 线程已经在某个技能里做事时，**不许被一条无上下文的判定抢走** ——
+            #    除非消息里真的出现了目标技能的词根（见 router.may_switch_to）。
+            #    这条防的是：一条视频线程里用户说"我重新上传照片"，被档案的词表抢走，
+            #    结果 `video.*` 的工具当场从模型手上消失，它只能反复调记忆工具兜圈子。
+            if not may_switch_to(body.message, sid, active):
+                sid = active if active in available else ""
             if sid and sid in available:
                 agent = get_skill(sid) or generic
             elif route is not None and route.skill_id == "":
                 agent = generic                    # L2 明说是 chat，不进业务技能
             else:
-                active = (thread.meta or {}).get("active_skill", "")
                 agent = get_skill(active) if active in available else generic
         if ctx is None:
             ctx = _ctx(thread, agent)

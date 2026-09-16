@@ -25,11 +25,16 @@ dependencies = [
     "reportlab>=3.6",
     "pypdf>=3",
     "requests>=2.25",
+    # —— MCP 客户端（09-16 起是**主依赖**，不再是"预留"）——
+    # 宿主把外部 MCP server 的工具接进对话（station/mcp/），内置的 websearch 本身
+    # 也是一个 stdio MCP server —— 少了这个包，整个 MCP 那一层都不存在。
+    # ★ 它原来挂在 [project.optional-dependencies] 里，而 Dockerfile 只跑
+    #   `pip install -e .`（不带 extras）→ **镜像里根本装不上**，上线就是 ImportError。
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
 docx = ["python-docx>=1.1"]        # weekly-report 的 export_docx
-mcp = ["mcp>=1.0"]                 # 预留：MCP 工具互操作（P4+）
 dev = ["pytest>=8", "httpx>=0.27"] # 跑离线测试
 
 [project.scripts]

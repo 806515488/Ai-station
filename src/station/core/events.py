@@ -21,6 +21,9 @@ EV_DELTA = "delta"                   # 模型最终回复里的一段文字（�
 EV_RENDER = "render"                 # 渲染卡片（工具返回了卡片 → 前端按 type 渲染）
 EV_DONE = "done"                     # 本轮结束
 EV_ERROR = "error"                   # 出错
+# 模型调用失败、正在退避重连（09-15）：data = {"attempt","total","wait","error"}。
+# 前端拿它在等待态里显示"连接失败，N 秒后重试（第 k/5 次）"——见 core/model.py 的 RETRY_WAITS。
+EV_RETRY = "retry"
 
 # 渲染卡片事件 data 的统一外壳键：
 #   EV_RENDER data = {"card": {"type": "page-card", ...}} —— card.type 对应前端渲染器注册表

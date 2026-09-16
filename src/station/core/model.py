@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 
@@ -43,6 +44,97 @@ _PROVIDERS = {
                    "text": "qwen-flash", "vision": "qwen-vl-max",
                    "key": "QWEN_API_KEY"},
 }
+
+
+# ── 退避重试（09-15）──────────────────────────────────────────────────────
+# 为什么要有它：模型调用失败分两种。一种是"过一会儿自己就好了"（网络抖动、对端
+# 5xx、以及下面那条导入竞态），另一种是"再试一百次也一样"（key 填错、模型名写错、
+# 配额用光）。前者应该自动重连，后者应该立刻把真话告诉用户 —— 给一个注定失败的
+# 错误退避半分钟，用户只会以为界面卡死了。
+#
+# ★ RETRY_WAITS 必须是**模块顶层常量**：单测要把它 monkeypatch 成 (0.0, …) 才不用
+#   真睡 31 秒（同一个理由见 skills/video/code/agnes.py 的 CREATE_RETRY_WAITS）。
+# ★ 本文件与 src/archive/engine/providers.py **各有一份同值的常量**，这是刻意的：
+#   archive 不许 import station（技能要能搬走），所以合并不了，只能靠一条测试盯着
+#   两边别漂移（tests/test_model_retry.py::test_retry_policy_does_not_drift）。
+RETRY_WAITS = (1.0, 2.0, 4.0, 8.0, 16.0)   # 最多重试 5 次，合计约 31 秒
+
+# 这些异常类名 = 传输层的"连不上/读不到"，等一会儿多半能好。
+# ★ 刻意按**类名字符串**比，而不是 import httpx / openai 来判类型 —— 那两个包正是
+#   被懒加载的东西（见下面的 import_chat_openai），为了判错去 import 它们等于本末倒置。
+# ★ 比的时候走**整条继承链**（见 _is_transient）：实际抛出来的常常是子类，
+#   比如 `OpenAIConnectionError`，而它爹才是这里的 `APIConnectionError`。
+_TRANSIENT_NAMES = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+    "RemoteProtocolError", "TransportError", "NetworkError",
+    "APIConnectionError", "APITimeoutError", "InternalServerError",
+})
+
+
+def _is_transient(err) -> bool:
+    """这个失败值不值得退避重试？True = 等一会儿再试，False = 立刻报错。
+
+    判定顺序（先看 HTTP 状态码，最准）：
+      · 状态码 ≥500 或 408 → 对端的锅，重试
+      · 状态码 4xx（含 401/403 鉴权、404 模型名、**429 配额**）→ 重试没用，立刻报
+        ★ 429 不重试是本仓既定口径，先例见 skills/video 的 CREATE_RETRY_WAITS：
+          "按次限流，越撞越死"。
+      · 没有状态码就看异常类名（**走整条继承链**，见下）/ 是不是内置的连接与超时异常
+      · 最后兜一条**导入竞态**：`partially initialized module 'httpx' …` —— 那是
+        服务器刚起后第一次调模型时，多个线程同时执行同一个 import 撞出来的，
+        几百毫秒后必然已经好了（详情见 import_chat_openai）。
+    """
+    code = getattr(err, "status_code", None)
+    if not isinstance(code, int):
+        # openai/langchain 的异常有的把状态码挂在 .response 上，两个位置都认
+        code = getattr(getattr(err, "response", None), "status_code", None)
+    if isinstance(code, int):
+        return code >= 500 or code == 408
+    # ★ 比的是**整条继承链**，不是光是叶子的类名：实测真抛出来的是
+    #   `OpenAIConnectionError`（它的爹才是 `APIConnectionError`）—— 只比叶子名会漏掉
+    #   最常见的那个"连不上"，退避就永远不生效。这个漏是 09-15 端到端真跑才抓到的，
+    #   单测抓不到（假的异常类名是我自己起的，正好起对了）。
+    if any(k.__name__ in _TRANSIENT_NAMES for k in type(err).__mro__):
+        return True
+    if isinstance(err, (ConnectionError, TimeoutError)):
+        return True
+    return "partially initialized module" in str(err)
+
+
+# ── 首次导入串行化 ────────────────────────────────────────────────────────
+# langchain_openai（连带 openai → pydantic → httpx）故意是**用到才 import** 的，
+# 这笔账（约 1.35 秒）落在"第一次真要用模型"那一次上。麻烦在于这一次可能同时有
+# 好几个线程在跑（对话的线程池线程、L2 判词的 daemon 线程、识别 job 的 6 路并发
+# worker），于是两个线程可能同时执行这条 import —— 后进来的那个会读到还没初始化
+# 完的 httpx，报 `partially initialized module 'httpx' has no attribute 'URL'`。
+# 它的症状很迷惑：**只错一次，之后永远正常**（只要有一个线程导完，sys.modules 里
+# 就是完整的了）。下面这把锁把"第一次导入"收成单线程，其余线程等在锁上。
+#
+# ★ 注意边界：archive 那边（engine/providers.py）有它自己的锁。跨包的那一瞬间
+#   （宿主 chat 与识别 visual 同时首次导入）仍可能撞 —— 两个包互不 import 就没法
+#   共用一把锁，那一段由上面的退避重试兜住（撞上了退避一次就好）。
+_IMPORT_LOCK = threading.Lock()
+_chat_openai = None                    # 缓存导入好的类，导一次就够
+
+
+def _load_chat_openai():
+    """真正执行 import 的那一句。单独成函数是为了**好测**（见导入串行化的用例）。"""
+    from langchain_openai import ChatOpenAI          # noqa：就是这句要串行化
+    return ChatOpenAI
+
+
+def import_chat_openai():
+    """懒加载 ChatOpenAI，且保证**全进程只导一次、其余线程等待**。
+
+    第一次调用会花约 1.35 秒；之后的调用就是读一个模块全局，几乎不要钱。
+    """
+    global _chat_openai
+    if _chat_openai is not None:        # 快路径：导过了直接给（不加锁，省开销）
+        return _chat_openai
+    with _IMPORT_LOCK:
+        if _chat_openai is None:        # 双检：可能刚才有别的线程已经导完了
+            _chat_openai = _load_chat_openai()
+    return _chat_openai
 
 
 def _to_llm(msgs: list[dict]) -> list[dict]:
@@ -197,11 +289,16 @@ class Model:
     def __init__(self, kind: str = "text", channel: str | None = None,
                  timeout: float = 180, max_retries: int = 1,
                  *, entries: list | None = None,
-                 total_budget: float | None = None):
+                 total_budget: float | None = None,
+                 retries: int | None = None):
         config.load_env()                       # 确保 .env 里的 key 已被读进环境变量
         self.kind = kind
         self._timeout = timeout
         self._max_retries = max_retries
+        # 整条链全挂了之后，最多再退避重跑几轮（见 RETRY_WAITS）。
+        # None = 用满 RETRY_WAITS 的长度（默认 5 轮）；0 = 不重试。
+        # ★ L2 判词必须传 0：它是"加速通道"，有 10 秒总预算，退避会把它彻底堵死。
+        self._retries = len(RETRY_WAITS) if retries is None else max(0, int(retries))
         # 整条链的**总预算**（秒）；None = 不限，每次尝试各自拿满 timeout。
         # ★ 判词槽必须给值：ROUTE_TIMEOUT=1.5 的语义是"整条链一共 1.5 秒"，
         #   不是"每条链各 1.5 秒"——按后者实现，3 条链就是 4.5 秒卡顿，
@@ -248,7 +345,9 @@ class Model:
             else:
                 where = "（请在右上角 ⚙「模型配置」中填写服务商提供的 API Key）"
             raise RuntimeError(f"{entry.get('id')} 未配置 key{where}")
-        from langchain_openai import ChatOpenAI          # 用到才 import（省启动时间）
+        # 用到才 import（省启动时间）；走 import_chat_openai 是为了串行化首次导入，
+        # 别改回裸 import（那个并发竞态见该函数的注释）。
+        ChatOpenAI = import_chat_openai()
         return ChatOpenAI(model=entry["model"], api_key=key,
                           base_url=entry.get("base_url") or None,
                           temperature=0,                 # 0=尽量确定，别乱编
@@ -261,13 +360,17 @@ class Model:
             return entry["_llm"]
         return self._build(entry, timeout)
 
-    def _attempts(self):
+    def _attempts(self, t0: float | None = None):
         """按降级顺序产出 (entry, 这次尝试能用的 timeout)。
 
         带总预算时：每次尝试的 timeout = min(单次 timeout, 剩余预算)；预算耗尽就停止
         尝试并报错 —— 这才是"整条链一共 N 秒"的正确语义。
+
+        ★ t0 由调用方传进来（不是这里取）：退避重试会**多轮**调用本函数，如果每轮
+          都重新取一次 t0，预算就被无限续命、永远耗不尽 —— L2 的"整条链一共 10 秒"
+          会当场失效。所以时钟只在进入轮次循环之前取一次。
         """
-        t0 = time.monotonic()
+        t0 = time.monotonic() if t0 is None else t0
         for i, entry in enumerate(self._entries):
             budget = None
             if self._total_budget:
@@ -279,6 +382,31 @@ class Model:
                 budget = min(self._timeout, left)
             yield entry, budget
 
+    def _retry_wait(self, rnd: int) -> float | None:
+        """第 rnd 轮（从 0 数）全挂之后该退避几秒；None = 不该重试了。
+
+        两种情况返回 None：轮次用完（self._retries），或 RETRY_WAITS 被截短到不够
+        （单测会把它 patch 成短的，得防越界）。
+        """
+        if rnd >= self._retries or rnd >= len(RETRY_WAITS):
+            return None
+        return RETRY_WAITS[rnd]
+
+    @staticmethod
+    def _notify_retry(cb, attempt: int, total: int, wait: float, err) -> None:
+        """告诉外面"正在重连"（对话侧由 stream 直接 yield，别处走这个回调）。
+
+        ★ 整段包 try/except：**通知坏掉绝不许影响调用本身** —— 重连是为了让用户
+          拿到结果，不能因为一个显示用的回调把正经事带崩。
+        """
+        if cb is None:
+            return
+        try:
+            cb({"attempt": attempt, "total": total, "wait": wait,
+                "error": f"{type(err).__name__}: {err}"})
+        except Exception:                      # noqa：显示层的锅，不该影响调用
+            pass
+
     def _fail_msg(self, err) -> str:
         """所有通道都挂时给一句能照着修的话（说清是哪个槽位、试过谁）。"""
         where = f"槽位「{self.slot}」" if self.slot else "模型"
@@ -286,22 +414,34 @@ class Model:
         return (f"{where}所有通道都失败了（试过 {tried}）："
                 f"{type(err).__name__}: {err}")
 
-    def respond(self, msgs: list[dict], tools=None) -> dict:
+    def respond(self, msgs: list[dict], tools=None, on_retry=None) -> dict:
         """把历史发给模型。tools 不为空时“绑定”工具说明 → 模型才知道能调什么。
 
-        失败就按降级链换下一家重发：invoke 是**原子**的（要么完整拿到，要么什么都
-        没有，不存在"半句话"），所以这里可以放心重试。
+        两层容错，别搞混：
+          · **内层**：按降级链换下一家（invoke 是**原子**的 —— 要么完整拿到、要么
+            什么都没有，不存在"半句话"，所以换家是安全的）。
+          · **外层**：整条链全挂了，且最后一个错是"过会儿就好"的那种 → 退避几秒
+            **整条链再来一轮**（最多 self._retries 轮）。先换家再退避，是因为换家
+            只要几百毫秒，而退避起步就 1 秒 —— 能靠换家解决的就别让用户等。
+        on_retry 是给调用方的显示回调（收到 {"attempt","total","wait","error"}）。
         """
         last: Exception | None = None
-        for entry, budget in self._attempts():
-            try:
-                # bind_tools([每个工具 schema]) 让模型在对话里能输出 tool_calls
-                llm = self._client(entry, budget)
-                if tools:
-                    llm = llm.bind_tools([t.schema() for t in tools])
-                return _from_resp(llm.invoke(_to_llm(msgs)))
-            except Exception as e:              # noqa：这一家不行 → 记下换下一家
-                last = e
+        t0 = time.monotonic()          # ★ 只取一次：多轮之间总预算不被重置
+        for rnd in range(self._retries + 1):
+            for entry, budget in self._attempts(t0):
+                try:
+                    # bind_tools([每个工具 schema]) 让模型在对话里能输出 tool_calls
+                    llm = self._client(entry, budget)
+                    if tools:
+                        llm = llm.bind_tools([t.schema() for t in tools])
+                    return _from_resp(llm.invoke(_to_llm(msgs)))
+                except Exception as e:          # noqa：这一家不行 → 记下换下一家
+                    last = e
+            wait = self._retry_wait(rnd)
+            if wait is None or not _is_transient(last):
+                break                           # 注定失败或轮次用完 → 别再让用户等
+            self._notify_retry(on_retry, rnd + 1, self._retries, wait, last)
+            time.sleep(wait)
         raise RuntimeError(self._fail_msg(last))
 
     def stream(self, msgs: list[dict], tools=None):
@@ -311,34 +451,47 @@ class Model:
         逃生阀：环境变量 STATION_STREAM=0 时直接退回非流式 —— 万一某家的流式端点
         不兼容（工具调用被吞/报错），不用改代码就能恢复旧行为。
 
+        除了 {"delta"} / {"final"}，退避等待时还会 yield 一种 **{"retry": {...}}**
+        （含第几次、共几次、等几秒），好让前端显示"正在重新连接"。全仓只有
+        core/agent.py 消费本函数的产出，加这一种 part 是安全的。
+
         ★ 降级铁律就在下面的 sent_any：**已经往外吐过字就绝不再换家**。继续换的话，
           用户看到的是"上一家的半句话 + 下一家的整句话"，是胡话，宁可报错。
+          这条同样管住外层的退避重试 —— 那句话一抛就直接穿出两层循环，不会再等。
         """
         if os.environ.get("STATION_STREAM", "1") == "0":
             yield {"final": self.respond(msgs, tools)}
             return
         last: Exception | None = None
-        for entry, budget in self._attempts():
-            sent_any = False                      # 这一家已经往外吐过字没有
-            try:
-                # 绑了工具才能流式收到 tool_calls（langchain 的 RunnableBinding 会转发流）
-                llm = self._client(entry, budget)
-                if tools:
-                    llm = llm.bind_tools([t.schema() for t in tools])
-                # 注意：_stream_parts 是【生成器】，异常是在消费到那一片时才抛出来的，
-                # 所以 try 必须把整个 for 包住，不能只包它的构造。
-                for part in _stream_parts(llm.stream(_to_llm(msgs))):
-                    if "delta" in part:
-                        sent_any = True
-                    yield part
-                return                            # 整段跑完 = 这次成功
-            except Exception as e:                # noqa：不能捕 BaseException，
-                # 否则会把客户端断连的 GeneratorExit 也吃掉、生成器停不下来。
-                if sent_any:
-                    raise RuntimeError(
-                        f"{entry.get('id')} 输出到一半失败，且已经向外发过内容，"
-                        f"不再切换通道：{type(e).__name__}: {e}") from e
-                last = e                          # 还没吐字 → 可以安全换下一家
+        t0 = time.monotonic()          # ★ 只取一次：多轮之间总预算不被重置
+        for rnd in range(self._retries + 1):
+            for entry, budget in self._attempts(t0):
+                sent_any = False                  # 这一家已经往外吐过字没有
+                try:
+                    # 绑了工具才能流式收到 tool_calls（langchain 的 RunnableBinding 会转发流）
+                    llm = self._client(entry, budget)
+                    if tools:
+                        llm = llm.bind_tools([t.schema() for t in tools])
+                    # 注意：_stream_parts 是【生成器】，异常是在消费到那一片时才抛出来的，
+                    # 所以 try 必须把整个 for 包住，不能只包它的构造。
+                    for part in _stream_parts(llm.stream(_to_llm(msgs))):
+                        if "delta" in part:
+                            sent_any = True
+                        yield part
+                    return                        # 整段跑完 = 这次成功
+                except Exception as e:            # noqa：不能捕 BaseException，
+                    # 否则会把客户端断连的 GeneratorExit 也吃掉、生成器停不下来。
+                    if sent_any:
+                        raise RuntimeError(
+                            f"{entry.get('id')} 输出到一半失败，且已经向外发过内容，"
+                            f"不再切换通道：{type(e).__name__}: {e}") from e
+                    last = e                      # 还没吐字 → 可以安全换下一家
+            wait = self._retry_wait(rnd)
+            if wait is None or not _is_transient(last):
+                break                             # 注定失败或轮次用完 → 别再让用户等
+            # 先把"要重连"告诉前端，再睡 —— 否则用户面对的是没有任何解释的长时间静默
+            yield {"retry": {"attempt": rnd + 1, "total": self._retries, "wait": wait}}
+            time.sleep(wait)
         raise RuntimeError(self._fail_msg(last))
 
 
@@ -483,10 +636,13 @@ class FakeModel:
 
 def build(kind: str = "text", channel: str | None = None,
           entries: list | None = None,
-          total_budget: float | None = None) -> Model:
+          total_budget: float | None = None,
+          retries: int | None = None) -> Model:
     """对外统一入口：造一个真实模型。
 
     - 老用法（`build("text")` / `build("text", channel="glm")`）：走 _PROVIDERS，行为不变。
     - 新用法（`build(entries=modelcfg.resolve(uid, "chat"))`）：按降级链逐家尝试。
+    - retries=None 用满 RETRY_WAITS（默认最多重试 5 次）；0 = 不重试。
     """
-    return Model(kind, channel, entries=entries, total_budget=total_budget)
+    return Model(kind, channel, entries=entries, total_budget=total_budget,
+                 retries=retries)

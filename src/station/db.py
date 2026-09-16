@@ -124,6 +124,16 @@ def init_db(c: sqlite3.Connection) -> None:
         cfg      TEXT NOT NULL,      -- JSON：{version, providers[], slots{}}
         updated  REAL NOT NULL
     );
+    -- 用户自己配的 MCP server（每人一份，跟模型配置同一种存法：整包 JSON 一列）。
+    -- ★ 只存**用户配的**那些：代码里写死的内置 server 不落库（见 station/mcp/config.py
+    --   的 BUILTIN_SERVERS）—— 落库就有"库里那条和代码里那条不一致"的问题。
+    -- ★ 这一列里**不含任何 stdio 命令**，那是刻意的安全边界（用户配不了 stdio），
+    --   别在别处偷偷加回来。
+    CREATE TABLE IF NOT EXISTS mcp_servers(
+        user_id  TEXT PRIMARY KEY,   -- 归属用户（每人一份，覆盖写）
+        cfg      TEXT NOT NULL,      -- JSON：{version, servers[{id,label,transport,url,headers}]}
+        updated  REAL NOT NULL
+    );
     -- 能力令牌：把某个文件**临时**开给外部服务抓取（视频生成的人像参考图就是这么用的）。
     -- 为什么不直接把文件 id 当公开路径：fid 是内容 sha1，那等于给了一个可枚举的面，
     -- 而且没有过期概念 —— 一旦公开就是永久公开。这里存的是不可猜、会过期、可撤销的取件码。
@@ -554,6 +564,44 @@ def model_config_delete(user_id: str) -> None:
     """删掉某用户的模型配置（"恢复默认"用；下次读就又回到内置默认了）。"""
     with _lock:
         conn().execute("DELETE FROM model_configs WHERE user_id=?", (user_id,))
+        conn().commit()
+
+
+# ── 用户自配的 MCP server（每人一份）──────────────────────────────────
+# 结构与理由同上一节（整包 JSON 一列）。读写/校验/合成都在 station/mcp/config.py，
+# 这里只管"存取"。
+
+def mcp_config_save(user_id: str, cfg: dict) -> None:
+    """保存（覆盖）某用户的 MCP 配置整包。"""
+    with _lock:
+        conn().execute(
+            "INSERT INTO mcp_servers(user_id,cfg,updated) VALUES(?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET cfg=excluded.cfg, "
+            "updated=excluded.updated",
+            (user_id, json.dumps(cfg, ensure_ascii=False), _now()))
+        conn().commit()
+
+
+def mcp_config_load(user_id: str) -> dict | None:
+    """读某用户的 MCP 配置；从没存过返回 None（**不等于**"没有 server"）。"""
+    if not user_id:
+        return None
+    with _lock:
+        row = conn().execute("SELECT cfg FROM mcp_servers WHERE user_id=?",
+                             (user_id,)).fetchone()
+        if row is None:
+            return None
+        try:
+            d = json.loads(row["cfg"])
+        except Exception:                # noqa：坏 JSON 当没存过，别让整站起不来
+            return None
+        return d if isinstance(d, dict) else None
+
+
+def mcp_config_delete(user_id: str) -> None:
+    """删掉某用户的 MCP 配置（"全部清空"用）。"""
+    with _lock:
+        conn().execute("DELETE FROM mcp_servers WHERE user_id=?", (user_id,))
         conn().commit()
 
 
