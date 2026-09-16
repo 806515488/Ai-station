@@ -30,7 +30,14 @@ dependencies = [
     # 也是一个 stdio MCP server —— 少了这个包，整个 MCP 那一层都不存在。
     # ★ 它原来挂在 [project.optional-dependencies] 里，而 Dockerfile 只跑
     #   `pip install -e .`（不带 extras）→ **镜像里根本装不上**，上线就是 ImportError。
-    "mcp>=1.0",
+    # ★★ **上界 `<2` 是必须的（09-16 上线时真炸了）**：mcp 2.x 把 `FastMCP` 改名成
+    #   `MCPServer`（`mcp.server.fastmcp` 整个没了）、其他 API 也变了。写 `>=1.0`
+    #   的话，任何人全新安装都会拿到 2.x，然后内置的 websearch server 一启动就
+    #   `ModuleNotFoundError`（本机恰好是 1.27，所以**本地测试全绿、上线才炸**）。
+    #   包自己在报错里给的出路就是 pin `mcp<2`。要升 2.x 是一次**迁移**，不是改个号：
+    #   得先把 servers/websearch.py 的 FastMCP 换成 MCPServer，再逐个核对
+    #   client.py 用到的 client/会话 API 有没有变。见 docs/status.md 的待办。
+    "mcp>=1.0,<2",
 ]
 
 [project.optional-dependencies]
