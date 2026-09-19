@@ -270,6 +270,248 @@ def test_skill_for_tool_matches_the_longest_namespace(monkeypatch):
     assert server._skill_for_tool("station.remember").id == "station"
 
 
+# ── 表单卡：MCP 返回的 <iframe src=…> → 对话流里的沙箱卡片 ────────────────
+# 这一节守的是 client.call_tool 那条返回路径：普通结果仍旧是**字符串**，
+# 而"整段就是一个 <iframe src=…>"会变成 {"text", "render"} 的宿主渲染契约。
+# ★ 两笔账不能混：MAX_TEXT（12000）量的是**要进模型上下文**的东西，卡片不进上下文。
+
+def _t(s):
+    """一个文本内容块。"""
+    import types
+    return types.SimpleNamespace(type="text", text=s)
+
+
+def _res(*blocks, is_error=False, structured=None):
+    """一份假的 MCP 调用结果（离线，不碰真 server）。"""
+    import types
+    return types.SimpleNamespace(content=list(blocks), isError=is_error,
+                                 structuredContent=structured)
+
+
+def _call(monkeypatch, res):
+    """把 call_tool 底下那层网络调用换成一份假结果。
+
+    ★ 换的是 `_with_session` / `_run` 这一层，**不是 call_tool 本身** —— 要测的恰恰是
+      call_tool 里"认不认得出表单"那段分支，把它自己换掉就等于什么都没测。
+    ★ `_with_session` 换成返回一个普通值（不是协程）：否则会留下一个从没 await 过的
+      协程，Python 会发 RuntimeWarning。
+    """
+    from station.mcp import client
+    monkeypatch.setattr(client, "_with_session", lambda spec, fn: "（假会话）")
+    monkeypatch.setattr(client, "_run", lambda coro, timeout: res)
+    return client
+
+
+# —— 回归：纯文本那条路一个字都没变 ——
+
+def test_plain_text_result_is_still_a_str(monkeypatch):
+    """回归：普通结果**仍旧是字符串**（模型那边读的就是它）。
+
+    这条对着 test_mcp_tool_runs_through_the_bridge（:198）和
+    test_mcp_tool_of_another_user_says_so_instead_of_crashing（:211）的口径，
+    但在**单元层**就把它钉住 —— 那两条要真起子进程，失败得慢。
+    """
+    c = _call(monkeypatch, _res(_t("桥接测试")))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, str) and "桥接测试" in out
+
+
+def test_error_result_is_never_truncated(monkeypatch):
+    """★★ 对端报错时，那串错误详情**不截断**。
+
+    既有行为：`isError` 在 `_content_to_text` 里是**早返回**，排在截断检查前面 ——
+    错误详情要完整给模型看，它才好换个法子再试。
+    ★ 拆 _flatten/_clamp 时最容易顺手把它并进截断分支，而**别的测试一条都抓不到**
+      （截断后的错误信息照样"有内容"，看上去完全正常）。这条就是为那个改动准备的。
+    """
+    c = _call(monkeypatch, _res(_t("x" * 20000), is_error=True))
+    out = c.call_tool(None, "any")
+    assert out.startswith("（工具报告失败）")
+    assert len(out) > 20000, "错误结果被截断了 —— 详情得完整给模型看"
+
+
+def test_truncation_suffix_is_unchanged(monkeypatch):
+    """截断的**措辞**也钉住：模型和人都在读这句话，改了就是无声的措辞漂移。"""
+    c = _call(monkeypatch, _res(_t("y" * 13000)))
+    out = c.call_tool(None, "any")
+    assert out.endswith("（内容过长，已截断，原文 13000 字符）")
+    assert len(out) == 12000 + len("\n…（内容过长，已截断，原文 13000 字符）")
+
+
+def test_structured_content_fallback_unchanged(monkeypatch):
+    """回归：没有文本块、只有 structuredContent 时仍退化成 JSON 文本。
+
+    ★ 拆分 _flatten/_clamp 时，这个兜底分支是最容易被整段丢掉的一小块。
+    """
+    c = _call(monkeypatch, _res(structured={"a": 1}))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, str) and '"a": 1' in out
+
+
+# —— 表单卡：该认的要认 ——
+
+def test_iframe_src_becomes_a_form_card(monkeypatch):
+    """整段就是一个 <iframe src=…> → 变成表单卡，且**不产出 sandbox 键**。
+
+    ★ 沙箱属性归前端所有（写死在渲染器的模板里）。后端要是也产一个，前端再信它，
+      来源方就能自己决定 sandbox 了 —— 那等于把承重墙交给对方。
+    """
+    c = _call(monkeypatch, _res(_t('<iframe src="http://x/f"></iframe>')))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, dict), "没认出来，卡片发不出去"
+    assert out["render"] == {"type": "iframe-card", "src": "http://x/f"}
+    assert "sandbox" not in out["render"], "沙箱不该由后端/来源方决定"
+    assert isinstance(out["text"], str) and out["text"], "得给模型一句话"
+    assert "<iframe" not in out["text"], "整段标签别进模型上下文"
+
+
+def test_iframe_attributes_survive_newlines_and_case(monkeypatch):
+    """属性里带换行 / 大写 / 多余空白，照样认出来（这是不用正则的原因）。"""
+    c = _call(monkeypatch, _res(_t('<IFRAME\n  SRC = "https://a/b"\n  height="520"\n></IFRAME>')))
+    out = c.call_tool(None, "any")
+    assert out["render"]["src"] == "https://a/b"
+    assert out["render"]["height"] == 520
+
+
+def test_iframe_payload_is_not_subject_to_the_context_limit(monkeypatch):
+    """★ 卡片那笔预算跟模型上下文那笔是**两笔账**。
+
+    MAX_TEXT=12000 是为"进模型上下文"设的，卡片**不进上下文**（只进前端和会话 meta）。
+    这条构造一个总长超过 12000 的 iframe 标签，钉住"**先判表单、再谈截断**"这个顺序
+    —— 顺序反了就会把标签截成半截。
+    """
+    pad = "p" * 20000
+    c = _call(monkeypatch, _res(_t(f'<iframe src="http://h/f" data-x="{pad}"></iframe>')))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, dict), "超过 12000 就被截断/漏判了"
+    assert out["render"]["src"] == "http://h/f"
+
+
+# —— 表单卡：不该认的别认 ——
+
+def test_iframe_inside_prose_is_not_a_card(monkeypatch):
+    """夹在散文里的 iframe **不算** —— 判据是"整段就是一个 iframe"。
+
+    ★ 放宽成"包含 iframe"的话：任何正文里提一句 iframe 都会长出卡片，
+      而且立刻要回答"那截散文怎么办"这个本来不必回答的问题。
+    """
+    c = _call(monkeypatch, _res(_t('这是表单：<iframe src="http://x/f"></iframe>请填写')))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, str), "散文里的 iframe 不该长出卡片"
+
+
+@pytest.mark.parametrize("bad", [
+    "javascript:alert(1)",
+    "data:text/html,<b>x</b>",
+    "//evil.com/f",              # 协议相对：给了 base 就会变成站外帧
+    "/admin",                    # 相对路径：给了 base 就会变成同源帧
+    "file:///etc/passwd",
+])
+def test_non_http_iframe_addresses_are_refused(monkeypatch, bad):
+    """只放行 http/https。★ 这里拦一道是**纵深**：真正承重的是前端 ——
+    卡片会从会话 meta 里回放出来，而回放那条路**根本不经过本文件**。
+    """
+    c = _call(monkeypatch, _res(_t(f'<iframe src="{bad}"></iframe>')))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, str), f"{bad} 不该变成卡片"
+
+
+def test_error_result_with_an_iframe_stays_text(monkeypatch):
+    """对端说"这次失败了"的同时返回一个 iframe → **仍是文本**，不长卡片。
+
+    ★ 失败的结果里嵌一张能点的表单，等于把"这次失败了"变成钓鱼面。
+    """
+    c = _call(monkeypatch, _res(_t('<iframe src="http://x/f"></iframe>'), is_error=True))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, str) and out.startswith("（工具报告失败）")
+
+
+def test_iframe_without_src_stays_text(monkeypatch):
+    """只有 srcdoc、没有 src 的 iframe 走老路（纯文本），不变成卡片。"""
+    c = _call(monkeypatch, _res(_t('<iframe srcdoc="<b>x</b>"></iframe>')))
+    assert isinstance(c.call_tool(None, "any"), str)
+
+
+# —— 超限：拒绝，而且拒绝得能被看见 ——
+
+def _oversize():
+    from station.mcp.client import MAX_CARD
+    pad = "z" * (MAX_CARD + 100)
+    return f'<iframe src="http://h/f" data-x="{pad}"></iframe>'
+
+
+def test_oversize_iframe_is_refused_with_a_render(monkeypatch):
+    """超过 MAX_CARD → 不渲染，但**必须带一张卡**说明为什么。
+
+    ★★ 这条守的是 core/agent.run_tool 的一个尖角：dict 的 `render` 若产出 0 张有效卡，
+      它会**穿透到 `str(out)`**，把 Python repr 原样漏给模型（模型会读到 `{'text': …}`）。
+      所以"拒绝"也得发一张卡，不能返回一个光秃秃的 dict。
+    """
+    c = _call(monkeypatch, _res(_t(_oversize())))
+    out = c.call_tool(None, "any")
+    assert isinstance(out, dict)
+    assert isinstance(out.get("render"), dict) and out["render"], "拒绝也必须带 render"
+    assert len(out["text"]) < 400, "给模型的说明要短"
+    assert "z" * 100 not in out["text"], "整个载荷别进模型上下文"
+
+
+def test_oversize_refusal_does_not_leak_a_python_repr(monkeypatch):
+    """端到端钉住上面那条：拒绝的结果过一遍 run_tool，模型不该看到 Python repr。"""
+    import types
+    from station.core.agent import run_tool
+    from station.core.context import Context
+    from station.core.tool import Tool
+    c = _call(monkeypatch, _res(_t(_oversize())))
+    out = c.call_tool(None, "any")
+    ctx = Context()
+    ret = run_tool(ctx, Tool(name="mcp.x.y", description="d", run=lambda _c: out), {})
+    assert "{" not in ret and "}" not in ret, f"repr 漏给模型了：{ret[:120]}"
+    assert "太大" in ret or "过大" in ret
+
+
+# —— 端到端：卡片契约只在一处生效 ——
+
+def test_form_card_flows_through_the_bridge_and_agent(monkeypatch, user):
+    """真 bridge runner → 真 run_tool：恰好发一个 EV_RENDER，模型只拿到那句短提示。
+
+    ★ 卡片的拆包只发生在 core/agent.run_tool 一处；这里把桥和它接起来跑通，
+      证明中间没有第二个人再加工一遍。
+    """
+    import types
+    from station.core.agent import run_tool
+    from station.core.context import Context
+    from station.core.events import EV_RENDER
+    from station.mcp import bridge, config as mcfg
+    from station.mcp import client
+
+    monkeypatch.setattr(mcfg, "find", lambda uid, sid: object())
+    monkeypatch.setattr(client, "call_tool",
+                        lambda spec, name, args, timeout=None:
+                        {"text": "一句话", "render": {"type": "iframe-card",
+                                                     "src": "http://x/f"}})
+    ctx = Context()
+    ret = run_tool(ctx, bridge.mcp_tools(user)[0], {})
+    cards = [e.data["card"] for e in ctx.events if e.type == EV_RENDER]
+    assert ret == "一句话", "模型那边只该拿到 text"
+    assert [c["type"] for c in cards] == ["iframe-card"], "卡片没发出去"
+
+
+def test_bridge_forwards_the_client_return_value_untouched(monkeypatch, user):
+    """桥**原样转发** call_tool 的返回值，不做二次加工。
+
+    它收到什么就是什么：字符串照旧（老行为），dict 也照旧（表单卡）。
+    """
+    import types
+    from station.mcp import bridge, config as mcfg
+    from station.mcp import client
+    monkeypatch.setattr(mcfg, "find", lambda uid, sid: object())
+    sentinel = {"text": "t", "render": {"type": "iframe-card", "src": "http://x/f"}}
+    monkeypatch.setattr(client, "call_tool", lambda *a, **k: sentinel)
+    tool = bridge.mcp_tools(user)[0]
+    got = tool.run(types.SimpleNamespace(user_id=user, thread=None), q=1)
+    assert got is sentinel, "桥动了返回值（多加工一层就会漂）"
+
+
 def builtin_specs_all():
     from station.mcp.config import builtin_specs
     return builtin_specs()

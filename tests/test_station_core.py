@@ -206,6 +206,46 @@ def test_index_html_knows_portrait_upload():
     assert "c.photos" in html, "草稿卡没有渲染人像缩略图"
 
 
+def test_index_html_keeps_form_frames_locked_down():
+    """前端粗护栏：表单卡的沙箱**一旦被放松，页面上看不出任何区别**。
+
+    这是本仓最典型的"静默失效"——没有报错、没有崩、界面完全正常，只是那个 iframe
+    从此够得着父页 DOM / cookie / 站内接口了。只能扫源码钉住。
+
+    ★ 断言盯着**真正那个 sandbox 属性值**，不是全文子串：注释里正大光明地写着
+      "刻意不给 allow-same-origin"，对全文 grep 会被自己的注释骗成永远绿。
+      （同 test_gtools.py 那条"别把字面量写死进断言、否则永远绿"的教训。）
+    """
+    import re
+    html = (config.REPO / "src/station/app/static/index.html").read_text(encoding="utf-8")
+
+    # ★ 先剥掉注释再扫。不剥的话测的是注释不是代码：这段注释里正大光明写着
+    #   "刻意不给 allow-same-origin"，还举了个 `sandbox=""` 的反例字符串 ——
+    #   写完这条测试第一次跑就被它自己骗红了（正则抓到的正是那个反例）。
+    code = "\n".join(l for l in html.splitlines()
+                     if not l.lstrip().startswith(("//", "/*", "*", "<!--")))
+
+    boxes = re.findall(r'sandbox="([^"]*)"', code)
+    assert boxes, "index.html 里一个 sandbox 属性都没有 —— iframe 没被关起来"
+    for s in boxes:
+        # ★★ 单给 allow-scripts + allow-same-origin 时，帧内脚本能反手摘掉自己的
+        #    sandbox 属性 —— 等于没沙箱。这条是承重墙，不能删。
+        assert "allow-same-origin" not in s, f"沙箱被放松了：sandbox={s!r}"
+        assert "allow-scripts" in s, f"表单自己的脚本跑不了：sandbox={s!r}"
+
+    assert "iframe-card" in code, "RENDERERS 里没有 iframe-card，表单发不出来"
+    assert "safeFrameUrl" in code, "地址白名单不在 —— src 会绕过 scheme 校验"
+    # ★ 表单卡靠 .card-m.wide 撑开。删了它症状是**纯视觉的**：卡片缩成 iframe 的
+    #   默认固有宽度（300px）那一条窄缝，不报错不崩，只是难用（09-19 用户截图报过）。
+    #   跟 .card-m.zooming 是同一个坑的两处补丁，别只留一个。
+    assert ".card-m.wide" in code, "少了撑开的样式 —— 表单卡会缩成 300px 的窄缝"
+    assert "no-referrer" in code, "少了 no-referrer，本站 origin 会送给站外服务"
+    # ★ 回传通道**必须**不存在：用户 09-19 拍板"表单点了确认就点了，不回传 agent"。
+    #   哪天有人顺手加个 postMessage 把表单数据接回对话，这条会红。
+    assert 'addEventListener("message"' not in code, "多了 message 监听 —— 有人在往回传数据"
+    assert "onmessage" not in code, "多了 onmessage —— 有人在往回传数据"
+
+
 def test_skill_can_carry_both_tools_and_runner():
     """一个技能可以同时有工具面和执行器入口（09-12 合并 archive/archive-engine）。
 

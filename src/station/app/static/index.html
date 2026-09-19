@@ -114,6 +114,11 @@
   .fcard .act{flex:none;color:var(--dim);font-size:11px}
   /* 生成的视频：内嵌播放。宽度跟着卡片走，上限 420px（再宽在对话流里就喧宾夺主了） */
   .vcard{display:block;width:100%;max-width:420px;border-radius:8px;background:#000;margin-top:2px}
+  /* 表单卡：整段表单跑在沙箱 iframe 里，宽度跟着卡片走（.card-m 上限 88%）。
+     背景显式给白：srcdoc 里的文档带自己的默认样式（白底黑字），不跟宿主的暗色主题，
+     这里只是避免加载那一瞬间透出黑底。 */
+  .ifcard{display:block;width:100%;border:1px solid var(--line);border-radius:8px;
+          background:#fff;margin-top:2px}
   /* 提示词草稿：用等宽一点的块显得"这是要拿去用的文本"，跟正文消息区分开 */
   .pcard{padding:8px 10px;border:1px solid var(--line);border-radius:7px;
          background:var(--panel);line-height:1.6;margin:2px 0 6px}
@@ -157,6 +162,12 @@
      .card-m 是 align-self:flex-start（缩到内容大小），不撑开的话整块只有
      三百多像素宽，图再高也放不大 —— 上一行的 max-height 就白给了。 */
   .card-m.zooming{width:88%}
+  /* 表单卡也要撑开 —— 跟上一行是**同一个坑**：.card-m 是 align-self:flex-start
+     （缩到内容大小），而 iframe 的**固有宽度只有 300px**，所以不撑开的话整张卡片
+     就被那 300px 顶住，右边留一大片空白（09-19 用户截图报的"页面渲染太窄了"）。
+     ★ 这条不能靠给 .ifcard 写 width:100% 解决：子元素的百分比是相对父元素算的，
+       而父元素（卡片）的宽度又要由子元素定 —— 循环，浏览器按 auto 处理，没用。 */
+  .card-m.wide{width:88%}
   .zoom .zdeg{color:var(--warn);font-size:11px}
   .zbar{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim);margin-top:5px}
   /* 口径学习卡：一条"学到的口径"占一格，等用户点确认 */
@@ -922,6 +933,9 @@ function renderCard(card){
   const fn=RENDERERS[card.type];
   if(!fn){ addMsg("tool","（未知卡片类型："+esc(card.type)+"）"); return; }
   const d=document.createElement("div"); d.className="card-m";
+  // 表单卡默认撑到可用宽度（见 .card-m.wide 那条注释：iframe 固有宽度只有 300px，
+  // 不撑开就是一条窄缝）。卡上写 `wide:false` 可以退回窄的 —— 短表单不必占满。
+  if(card.type==="iframe-card" && card.wide!==false) d.classList.add("wide");
   d.innerHTML=fn(card);
   $("#msgs").appendChild(d);
   $("#msgs").scrollTop=$("#msgs").scrollHeight;
@@ -1105,6 +1119,60 @@ window.spinImg=(btn,d)=>{
   const t=box.querySelector(".zdeg"); if(t) t.textContent=box._rot?`已转 ${box._rot}°`:"";
 };
 
+// —— 表单卡（iframe-card）的地基 ——
+// ★ 为什么表单走卡片、不走消息正文里的裸 HTML（09-19 定的）：正文是先按行解析的
+//   Markdown（mdToHtml），裸 <iframe> 会撞上四个坑，实测输出：
+//     ① 夹一个空行 → </p><p> 被塞进标签里，srcdoc 当场腰斩（"…</style></p>"）；
+//     ② srcdoc 里有反引号 → `x` 变成 <code>x</code>；
+//     ③ CSS 里的 * → 被当斜体吃掉；
+//     ④ srcdoc 里有 [字](链接) → 换成 <a href="…">，**那对引号直接终结 srcdoc 属性**。
+//   卡片这条路完全绕开 mdToHtml，HTML 原样进。
+// ★ 沙箱：allow-forms（表单能提交）+ allow-scripts（表单自己的脚本能跑），
+//   **刻意不给 allow-same-origin** —— 单给这两个它顶多是个孤岛；一旦再加
+//   allow-same-origin，iframe 里的脚本就能反手把父页上的 sandbox 属性摘掉，等于没沙箱。
+//   不给的话它是 opaque origin，够不着 window.parent / cookie / 这个站的接口。
+// ★ 表单点了"确认"之后发生什么，这里**一概不管** —— 不加任何 postMessage 回传通道，
+//   对话里不冒气泡、agent 也看不到（09-19 用户原话："只是点了就行"）。往哪提交、
+//   要不要存，是表单自己的 action / 脚本的事。
+// 表单地址的白名单校验。★ scheme 一律交给 new URL() 归一化之后再判 —— 正则挡不住
+// 大小写混合、前导空白/换行、以及 `h&#116;tp:` 这类实体（属性解码之后就变成合法 URL 了）。
+// ★ **不给 base**：给了 base，`/admin` 会悄悄变成同源帧、`//evil.com` 会变成隐式
+//   scheme 的站外帧。要求绝对地址是一条能一眼讲清、也好审的规矩。
+function safeFrameUrl(raw){
+  try{
+    const u=new URL(String(raw==null?"":raw).trim());
+    if(u.protocol!=="http:" && u.protocol!=="https:") return "";
+    if(u.href.length>4096) return "";
+    return u.href;                               // 归一化后的绝对地址
+  }catch(e){ return ""; }                        // 相对地址 / 协议相对 / 纯垃圾
+}
+// 把一个 **HTML 字符串** 归一成可渲染的东西：
+//   {mode:"src", url} —— 里面是个带 src 的 <iframe>
+//   {mode:"doc", doc} —— 内联文档（srcdoc / 整段 HTML）
+//   认不出或不合法 → null（渲染器据此走"没加载"分支，而不是吐一个 src="" 去导航本站）
+// ★ 收的是 HTML，**裸地址不要往这儿喂** —— 那会让它走"内联文档"那条分支。
+//   后端给的 card.src 是个裸地址，渲染器里直接过 safeFrameUrl，不经过这里。
+// ★★ 只读 src / srcdoc 两个属性，**绝不透传来源标签上的 sandbox / allow /
+//    referrerpolicy** —— 沙箱那串属性只能由下面的模板自己产出，否则来源方写一个
+//    sandbox="" 就把沙箱关了（这是整个功能的承重墙）。
+// ★ src 优先于 srcdoc：否则来源方可以用 srcdoc 绕过上面那条 URL 白名单。
+function iframeDoc(html){
+  const t=String(html==null?"":html).trim();
+  if(!/^<iframe[\s>]/i.test(t)) return {mode:"doc",doc:t};
+  // DOMParser 出来的文档是**惰性的**（不挂浏览上下文）：脚本不跑、iframe 不加载，
+  // 拿它读属性最安全；顺带把 srcdoc 里的 &lt; 这类实体自动解回原文。
+  const f=new DOMParser().parseFromString(t,"text/html").querySelector("iframe");
+  if(!f) return {mode:"doc",doc:t};
+  const src=f.getAttribute("src");
+  if(src!=null){ const u=safeFrameUrl(src); return u?{mode:"src",url:u}:null; }
+  const sd=f.getAttribute("srcdoc");
+  return {mode:"doc", doc: sd!=null?sd:f.innerHTML};
+}
+// 抬头里显示的主机名 —— 这是**唯一**的防钓鱼手段：表单长在我们自己的对话界面里，
+// 天然带着这个 App 的视觉权威感。不把来源摆出来的话，"会话已过期，请重新输入密码"
+// 这种页面是分不出来的。
+function frameHost(url){ try{ return new URL(url).host || url; }catch(e){ return url; } }
+
 const RENDERERS={
   // 进度块卡片（job）：后台任务（视频生成…）的进度面板 —— **长在发起它的那个位置**。
   // ★★ 为什么是卡片、而不是"回合结束时往对话末尾追加一块"（09-16 改，修用户报的两个
@@ -1135,6 +1203,39 @@ const RENDERERS={
            download="${esc(f.name||"video.mp4")}">下载 mp4</a>
         <span class="hint">${esc(f.name||"")}</span></div>`;}).join("")
       ||'<span class="hint">（暂时拿不到视频文件）</span>'}`,
+  // 表单卡：把 c.src（服务端托管的表单）或 c.html（内联文档）套沙箱 iframe 渲染
+  // （来龙去脉见 iframeDoc 上方）。
+  // ★ 高度由服务端/模型报（表单长短差很多）：钳在 140–1200，不给就 520 —— 再高会把
+  //   整条对话流顶没了。★ 刻意**不做 postMessage 高度协商**：那是个回传通道，v1 不要。
+  // ★★ `sandbox` 和 `referrerpolicy` 写死在这里、**不从输入里取**；`allow=""` 顺手把
+  //    摄像头/麦克风/定位/全屏关掉（帧里的表单不该要这些）。`no-referrer` 是因为默认值
+  //    （strict-origin-when-cross-origin）仍会把本站的 origin 送给站外服务。
+  // ★ 抬头默认显示**主机名**而不是笼统的"表单"（见 frameHost）。
+  // ★ 底部那个"在新窗口打开"不是装饰：目标站发 X-Frame-Options: DENY、或者本站是
+  //   https 而地址是 http://（混合内容会被浏览器直接拦掉）时，**JS 检测不到**，
+  //   症状都是一个没有解释的白框；有这条链接用户至少知道该去哪看。
+  "iframe-card":c=>{
+    const head=`<div class="caph">📝 <b>${esc(c.title||"表单")}</b>${
+      c.note?` <span class="hint">${esc(c.note)}</span>`:""}</div>`;
+    if(c.error) return head+`<div class="hint">${esc(c.error)}</div>`;
+    // ★ c.src 是**裸地址**、c.html 才是 HTML —— 两条路的判法不一样，别混喂给同一个
+    //   函数：把裸地址交给 iframeDoc() 会让它走"内联文档"那条分支，于是一个
+    //   `javascript:` 的地址会被当成 srcdoc 原样渲染出来（实测踩到，见下面那条注释）。
+    let f;
+    if(c.src!=null){ const u=safeFrameUrl(c.src); f=u?{mode:"src",url:u}:null; }
+    else f=iframeDoc(c.html);
+    if(!f) return head+`<div class="hint">这个表单的地址不合法，没有加载。</div>`;
+    const h=Math.max(140,Math.min(1200,Number(c.height)||520));
+    if(f.mode==="src") return head
+      +`<div class="hint">内容来自 <b>${esc(frameHost(f.url))}</b> ·
+         <a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">在新窗口打开</a></div>`
+      +`<iframe class="ifcard" sandbox="allow-forms allow-scripts" allow=""
+          referrerpolicy="no-referrer" style="height:${h}px" src="${esc(f.url)}"></iframe>`;
+    // 内联文档（srcdoc）这条路：esc() 把 &lt; 之类转义进属性，浏览器解析时解回原文，
+    // 换行在属性值里也原样保留，所以多行表单不会断。
+    return head+`<iframe class="ifcard" sandbox="allow-forms allow-scripts" allow=""
+      style="height:${h}px" srcdoc="${esc(f.doc)}"></iframe>`;
+  },
   // 提示词草稿卡：**先给用户看过目，点头了才真去生成**（两步制，见 skills/video）。
   // ★ 按钮里的话术**必须带「视频」两个字** —— 按钮也是一条路由输入，L1 靠它把这句话
   //   归回 video 技能（见 core/router.py 的 video 关键词 + unified._routing_hints 的锚点，
