@@ -334,11 +334,16 @@ def test_video_slot_is_not_probed_as_chat():
     不测更糟）。所以 probe_entry 多回一个"命中的是哪个槽位"，端点靠它跳过试连。
     """
     modelcfg.save_config("u1", modelcfg.default_config())
-    url, key, model, slot = modelcfg.probe_entry("u1", "agnes")
+    url, key, model, slot, effort = modelcfg.probe_entry("u1", "agnes")
     assert slot == "video" and model == "agnes-video-2.5-flash"
     assert slot in modelcfg.PROBE_NOT_CHAT, "这个槽位必须在「跳过试连」的名单里"
     # 内置那几家仍然先命中 chat —— 行为一字不变（video 排在 order 最后）
     assert modelcfg.probe_entry("u1", "glm")[3] == "chat"
+    # ★ 09-20 起的第 5 个返回值是「推理强度」：**只有命中通用模型那一行才给值**，
+    #   别的时候一律空串。agnes 命中的是 video，所以这里必须空 —— 否则等于给视频
+    #   那一行报一个它根本用不到的红叉（同上面"假红灯比不测更糟"那条）。
+    assert effort == ""
+    assert modelcfg.probe_entry("u1", "glm")[4] == "low"   # glm 通用模型实测默认档
 
 
 def test_builtin_backfill():
@@ -537,3 +542,130 @@ def test_provider_drift_guard_actually_bites(monkeypatch):
         "现场没造出来（monkeypatch 没生效），下面那条断言就没意义了"
     assert not [d for d in _provider_diff() if d[0] == "只有宿主有"], \
         "station 多一家不算漂移 —— 这里报红说明护栏又退回对称比较了"
+
+
+# ── ⑨ 推理强度（09-20）：只挂通用模型、默认填好、脏值拦下 ──────────────
+# 加这一栏的起因：glm-5.3-flash 是推理模型，答「列 50 首歌」要 **50.5 秒**才写第一个
+# 正文字（思考走 reasoning_content，langchain 只认 content，宿主看到的就是"界面全白"）。
+# 实测带 reasoning_effort=low 后同一题 **0.57 秒**。但**不是每家都认**（qwen 会 400，
+# 它要 thinking_budget）—— 400 会让降级链静默换家，所以这一栏的每条规矩都得钉住。
+
+
+def test_builtin_default_fills_measured_reasoning_effort():
+    """内置家"打开就是对的"：**实测需要调档的家**预填好，没测过的一律留空。
+
+    留空是安全默认（= 一个字节都不发）；预填只给"我们真测过、确实需要"的家 ——
+    替用户猜错的代价是给他的对端发一个不认的参数，换来一个静默换家的 400。
+    """
+    by = {p["id"]: p for p in modelcfg.default_config()["providers"]}
+    assert by["glm"]["reasoning_effort"] == "low"      # 实测 51075ms → 572ms
+    # qwen 实测**收到这个参数会 400**（它要 thinking_budget 正整数）→ 必须留空
+    assert by["qwen"]["reasoning_effort"] == ""
+    assert by["deepseek"]["reasoning_effort"] == ""    # 不做思考，没有需要
+
+
+def test_old_stored_config_backfills_reasoning_effort():
+    """老配置（库里那份没这一栏）加载时要补上内置默认。
+
+    不补的话：**已经存过配置的老用户永远拿不到 glm=low** —— 他打开界面看到的
+    是空白，又不知道要不要填，等于这个修复对他完全没生效。
+    """
+    db.model_config_save("u1", {"version": 1, "providers": [_p("glm")],
+                                "slots": _slots("glm")})
+    got = modelcfg.load_config("u1")
+    assert got["providers"][0]["reasoning_effort"] == "low"
+
+
+def test_explicitly_emptied_effort_is_not_backfilled():
+    """★★ 用户**主动清空**过的不许填回去 —— 键存在、值为空 = 那是他的选择。
+
+    判据必须是"键在不在"而不是"值空不空"（与 api_key 的三态同一个道理）。
+    写错的话：用户把这一栏改成「留空」，下次打开又变回 low，且没有任何提示 ——
+    他会以为界面坏了，或者以为自己没保存成功。
+    """
+    p = _p("glm")
+    p["reasoning_effort"] = ""            # 键在、值空 = 显式留空
+    db.model_config_save("u1", {"version": 1, "providers": [p], "slots": _slots("glm")})
+    assert modelcfg.load_config("u1")["providers"][0]["reasoning_effort"] == ""
+
+
+def test_save_config_keeps_reasoning_effort():
+    """`_KEEP` 白名单必须认这个字段。
+
+    漏了它：用户填了、点了保存、也不报错，**就是下次打开变空了** ——
+    本仓为同一个坑写过注释（"加一个新的模型名字段时必须同步加进这个元组"）。
+    """
+    cfg = modelcfg.default_config()
+    cfg["providers"][0]["reasoning_effort"] = "high"
+    modelcfg.save_config("u1", cfg)
+    assert modelcfg.load_config("u1")["providers"][0]["reasoning_effort"] == "high"
+
+
+def test_bad_effort_value_is_rejected_at_save():
+    """脏值必须在**保存这关**就拦下，不能流到运行时。
+
+    放过去 = 发给对端一个它不认的档位 = 400 → 4xx 不重试 → 降级链静默换家，
+    而用户只会觉得"怎么换了个模型/变笨了"，永远查不到这一栏头上。
+    """
+    cfg = modelcfg.default_config()
+    {p["id"]: p for p in cfg["providers"]}["glm"]["reasoning_effort"] = "medium2"
+    with pytest.raises(ValueError) as e:
+        modelcfg.save_config("u1", cfg)
+    assert "推理强度" in str(e.value)
+
+
+@pytest.mark.parametrize("slot,expected",
+                         [("chat", "low"), ("vision", ""), ("route", ""), ("video", "")])
+def test_effort_only_reaches_the_chat_slot(slot, expected):
+    """★★ 只有「通用模型」那一条带这个参数，别的槽位一律空串。
+
+    这是用户 09-20 明确拍板的范围。发别的槽位没有任何意义（判词本来就要快、
+    视频压根不是对话模型、识图走另一条链），只会多一个"对端不认就 400 →
+    静默换家"的机会 —— 每多一个槽位发它，就多一份白担的风险。
+    """
+    p = _p("glm", route_model="r-glm", reasoning_effort="low")
+    e = modelcfg._entry(p, slot, False)
+    assert e is not None, f"{slot} 这一条的模型名夹具没给全"
+    assert e["reasoning_effort"] == expected
+
+
+# ── ⑩ 推理强度的传参形状（core/model.py 的 reasoning_kwargs）──────────────
+# 这个函数存在的唯一理由：**同一套参数不能有两份写法** —— 真对话（Model._build）
+# 和「测试连接」探针都调它。两处各写一份的话，"探针说能用、真说话却发了另一套"
+# 这种偏差迟早发生，而且没有任何报错。
+
+def test_reasoning_kwargs_empty_means_send_nothing():
+    """空串 = **一个键都不带**（不是 "发个空的"）。不认这个参数的家收到会 400。"""
+    from station.core.model import reasoning_kwargs
+    assert reasoning_kwargs(object, "") == {}
+    assert reasoning_kwargs(object, None) == {}
+    assert reasoning_kwargs(object, "   ") == {}
+
+
+def test_reasoning_kwargs_prefers_explicit_field():
+    """装的是新版 langchain（有正式字段）→ 显式传，避免那条 UserWarning。
+
+    ★ 顺带钉住 "max" 能原样过去：本仓允许的档位比 langchain 老代码里那个
+      Literal["low","medium","high"] 宽，走显式字段时注解是 `str | None` 才收得下。
+    """
+    from station.core.model import reasoning_kwargs
+
+    class NewLangChain:
+        model_fields = {"model": None, "reasoning_effort": None}
+
+    assert reasoning_kwargs(NewLangChain, "low") == {"reasoning_effort": "low"}
+    assert reasoning_kwargs(NewLangChain, "max") == {"reasoning_effort": "max"}
+
+
+def test_reasoning_kwargs_falls_back_on_old_langchain():
+    """老版本没有这个字段 → 退回 model_kwargs（原样进请求体，行为一致）。
+
+    依赖只钉了 `langchain-openai>=1`：硬传未知字段会撞 pydantic 校验，
+    那会让**整条链在构造期就失败**（比多一行警告严重得多）。
+    """
+    from station.core.model import reasoning_kwargs
+
+    class OldLangChain:
+        model_fields = {"model": None}          # 没有 reasoning_effort
+
+    assert reasoning_kwargs(OldLangChain, "low") == {"model_kwargs": {"reasoning_effort": "low"}}

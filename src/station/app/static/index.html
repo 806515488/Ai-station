@@ -242,7 +242,7 @@
   /* —— 模型配置弹窗（居中模态）——
      z-index 必须高于产物抽屉的 61 和登录遮罩的 50，否则被它们盖住。
      类名统一 cfg 前缀：这里既有 .prow（产物抽屉的行）又有 .card-m 等通用名，
-     起通用名会静默覆盖别处的样式（conventions 坑区记过这条）。
+     起通用名会静默覆盖别处的样式（docs/pitfalls.md记过这条）。
 
      布局是「头 / 滚动体 / 钉底保存条」三段：底栏不跟着滚，所以
      「提示语 + 保存按钮」永远同屏 —— 这是修「点了保存没反应」那个坑的正面做法
@@ -461,7 +461,7 @@
 
   </div>
 
-  <!-- 钉底保存条：提示语在按钮正上方，永远同屏（conventions 坑区那条的正面解法） -->
+  <!-- 钉底保存条：提示语在按钮正上方，永远同屏（docs/pitfalls.md那条的正面解法） -->
   <div id="cfgFoot">
     <div class="hint" id="cfgFootHint"></div>
     <div class="cfgFootRow">
@@ -1738,6 +1738,14 @@ let cfgKeys={};        // provider id → 用户刚敲的 key。★ 必须存着
 const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model",
                 video:"video_model"};
 
+// 「推理强度」的可选值。★ 用下拉、不用自由输入框：这个值会**原样发给对端**，
+// 填个它不认的档位就是 400 → 4xx 不重试 → 降级链**静默换家**，用户只会觉得
+// "怎么换了个模型/变笨了"（同 docs/pitfalls.md 工具名那条）。下拉把可选值锁死，
+// 脏值在界面上就**表达不出来**（服务端 _validate 还会再拦一道）。
+// 空串排第一且是默认：语义是"这个参数一个字节都不发"，不是"发个空的"。
+const CFG_EFFORTS=[["","留空（不发送）"],["low","low（最快）"],["medium","medium"],
+                   ["high","high"],["max","max（最慢）"]];
+
 // ★ 面板必须显成 flex：它是「头 / 滚动体 / 钉底保存条」的三段布局，靠 flex 才有
 //   那个钉住的底栏。这里是**内联 style**，优先级高于样式表里的 display:flex ——
 //   写成 "block" 会把样式表里的 display:flex 整个盖掉，面板退化成普通块，
@@ -1851,6 +1859,26 @@ function cfgField(id, key, label, value, ph, fh){
     +'<em class="fh">'+esc(fh||"")+'</em>';
 }
 
+// 「推理强度」——**只挂在「通用模型」那一行下面**，别处不挂。
+// 它是"对话要多想多久"的档位：判词要的是快、视频压根不是对话模型、识图走另一条链，
+// 给它们发没有意义（服务端也因此只在 chat 那一条上带这个参数，见 modelcfg._entry）。
+// 右侧说明照老规矩**常驻**：占位符一填就没了，用户填完还得看得到判断依据。
+// ★ 但这一列只有 152px、`white-space:nowrap` 超出就打省略号（见 .cfgp-grid .fh），
+//   所以**常驻文字必须短**（同卡其它几行都是 7~12 字）。完整解释挂 title 上，
+//   鼠标停上去能看到 —— 写成一大段的话会被截成"只对「通用模型」生效，推理…"，
+//   等于那半句白写了。
+function cfgEffortField(id, value){
+  const cur=(value||"");
+  const opts=CFG_EFFORTS.map(function(o){
+    return '<option value="'+o[0]+'"'+(o[0]===cur?" selected":"")+'>'+esc(o[1])+'</option>';
+  }).join("");
+  const full="只对「通用模型」生效。推理模型会先想一大段才开口，调低档位能明显变快；"
+    +"留空则完全不发送这个参数。点「测试连接」可以验证此来源是否接受它。";
+  return '<label for="cfgp-'+id+'-effort">推理强度</label>'
+    +'<select id="cfgp-'+id+'-effort">'+opts+'</select>'
+    +'<em class="fh" title="'+esc(full)+'">推理模型调低可明显变快</em>';
+}
+
 // 这一家的提示语：模板带来的就显示模板说明，自己加的给一句通用指引
 function cfgHintFor(p){
   const pre=(cfgData.presets||[]).find(x=>x.id===p.id);
@@ -1862,7 +1890,7 @@ function cfgHintFor(p){
 
 // 卡片标题右侧的状态文字：把"密钥从哪来"直接写出来。
 // key_source 的三种值对应 .env / 自己存的 / 还没配 —— 用户最需要知道的就是这个，
-// 否则他分不清框里那串是自己填的还是 .env 里带来的（conventions 坑区记过）。
+// 否则他分不清框里那串是自己填的还是 .env 里带来的（docs/pitfalls.md记过）。
 function cfgKeyState(p){
   if(p.key_source==="db")  return "使用自有密钥";
   if(p.key_source==="env") return "使用系统预置密钥";
@@ -1894,6 +1922,8 @@ function cfgProvRow(p){
     +cfgField(id,'label','名称',(p.label||""),"便于识别的名称，如「我的智谱」")
     +cfgField(id,'url','接口地址',(p.base_url||""),"服务商提供的 https:// 地址")
     +cfgField(id,'text','通用模型',(p.text_model||""),"如 glm-5.3-flash","对话与文本生成")
+    // 紧跟在「通用模型」下面 —— 它只作用于这一行（见 cfgEffortField 的注释）
+    +cfgEffortField(id,(p.reasoning_effort||""))
     // ★ 占位符不能举别家的模型名（比如在智谱的卡上写 "如 qwen-flash"）—— 用户会照着填错。
     //   拿不准就写"可留空"这种跟厂商无关的话。
     +cfgField(id,'route','意图识别模型',(p.route_model||""),"可留空","留空则与「通用模型」一致")
@@ -1914,10 +1944,11 @@ function cfgCollect(){
   (cfgData.config.providers||[]).forEach(p=>{
     const g=i=>document.getElementById("cfgp-"+p.id+"-"+i);
     const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),
-          vd=g("video"),k=g("key");
+          vd=g("video"),k=g("key"),ef=g("effort");
     if(l) p.label=l.value.trim();      if(u) p.base_url=u.value.trim();
     if(t) p.text_model=t.value.trim(); if(v) p.vision_model=v.value.trim();
     if(r) p.route_model=r.value.trim(); if(vd) p.video_model=vd.value.trim();
+    if(ef) p.reasoning_effort=ef.value;   // ""=留空（服务端语义：一个字节都不发）
     if(k) cfgKeys[p.id]=k.value;       // ★ key 也一起收走，否则重绘就丢了
   });
 }
@@ -1929,7 +1960,12 @@ function cfgPayload(){
   return {providers:(c.providers||[]).map(p=>{
     const o={id:p.id,label:p.label,base_url:p.base_url,text_model:p.text_model,
              vision_model:p.vision_model,route_model:p.route_model,
-             video_model:p.video_model,key_env:p.key_env};
+             video_model:p.video_model,key_env:p.key_env,
+             // ★ 必须**每次都带上**这一栏（含空串）。少了它：服务端的 _KEEP 会把字段
+             //   滤掉，而 _normalize 对"键不存在"的家会回填内置默认 —— 于是用户
+             //   **主动改成「留空」会被静默改回 low**，他下次打开发现又变回去了。
+             //   （与 api_key 的三态不同：这里空串本身就是他要的值，不是"没填"。）
+             reasoning_effort:(p.reasoning_effort||"")};
     // ★ 只有**动过**才提交 api_key：原样不动就不带这个字段（服务端语义 = 不改动）。
     //   少了这个判断的话，框里预填的 src/.env 密钥会被一次"什么都没改"的保存
     //   复制进库，"来自 src/.env" 的来源标记就没了（用户再也分不清是抄来的还是自己填的）。
@@ -2021,11 +2057,24 @@ async function cfgTest(pid){
   }catch(e){ d={ok:false,hint:"请求未发出，请确认服务是否正在运行"}; }
   // 三种结果。★ 中间那种（skip）是**中性提示**，不是失败：视频模型不是对话模型，
   //   拿对话接口去打它必然 400 —— 显示成红叉会让用户去改一个本来正确的模型名。
-  say(d.skip
-    ? '<span class="hint">'+esc(d.hint||"这一行不支持试连")+'</span>'
-    : d.ok
-      ? '<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>'
-      : '<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>');
+  let html;
+  if(d.skip){
+    html='<span class="hint">'+esc(d.hint||"这一行不支持试连")+'</span>';
+  }else if(d.ok){
+    html='<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>';
+    // 「推理强度」非空时，服务端会**多打一趟**单独验它（见 app/server.py 的测试端点）。
+    // 单独报是为了让用户分得清"地址填错了"和"这个参数对端不收" —— 混在一起显示成
+    // 红叉，他会去改一个本来就正确的地址（同上面 skip 那条的取舍）。
+    if(d.effort){
+      html += d.effort.accepted
+        ? '<span class="hint"> · 推理强度 '+esc(d.effort.value)+' 已生效</span>'
+        : '<span class="res bad">✕ 此来源不接受「推理强度 '+esc(d.effort.value)
+          +'」，请把这一栏改回「留空」</span>';
+    }
+  }else{
+    html='<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>';
+  }
+  say(html);
 }
 
 async function cfgReset(){

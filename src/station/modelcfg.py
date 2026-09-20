@@ -69,6 +69,25 @@ PROBE_NOT_CHAT = {
     "video": "视频模型不走对话接口，没法用「测试连接」试。保存后直接生成一条试试。",
 }
 
+# ── 「推理强度」这个参数（09-20）────────────────────────────────────────
+# 为什么要有它：有些模型是**推理模型**，收到问题先想一大段才开口。实测
+#   `glm-5.3-flash` 答「列 50 首歌」：842ms 开始思考、吐了 9673 字的思考过程、
+#   **50.5 秒才写第一个正文字**；而这段思考走的是 `reasoning_content` 字段，
+#   langchain 只认 content —— 于是宿主测到"首字 50 秒"、界面全程空白，
+#   看着像卡死，其实模型一直在干活（见 docs/pitfalls.md）。
+# ★ 标准参数 `reasoning_effort` 能调档：实测同一题 **51075ms → 572ms**。
+# ★★ **绝不能无条件发**：不是每家都认 —— 实测 qwen 直接 400（它要的是
+#   `thinking_budget` 正整数）。发了不认 = 400 → 4xx 不重试 → 降级链静默换家，
+#   与"工具名带点号"是同一个坑（见 pitfalls）。所以：**空串 = 一个字都不发**，
+#   而且取值要在保存这关就卡死，别让用户填个"medium2"上去变成运行时的天书 400。
+REASONING_EFFORTS = ("low", "medium", "high", "max")
+
+# 内置那几家**我们实测过**的默认档。留空 = 不发送（deepseek 不做思考、qwen 不认）。
+# ★ 只写"实测过确实需要"的家：没测过的就别预填，宁可让用户自己点「测试连接」验。
+BUILTIN_REASONING_EFFORT = {
+    "glm": "low",        # 实测：不填 50.5s，填 low 后 0.57s
+}
+
 # 内置服务商。`key_env` 是"去哪个环境变量找 key"（即 src/.env 里那几行）。
 # 注意：这里就是那份漂移了两处的表的合并结果，口径是"取 station 侧的值"——
 # 因为 Web 真在跑的是它；archive 的 CLI 走自己那张 PROVIDERS 表，不受影响。
@@ -190,7 +209,7 @@ def chain_label(entries: list) -> str:
     不会把上一家读出来的结果当成这一家的。
 
     已知取舍：在**同一个 provider 里改模型名**不会让 OCR 缓存失效（标签没变）——
-    真要重读就换个 provider，或删掉 data/ocr_cache 里对应的条目。见 conventions 坑区。
+    真要重读就换个 provider，或删掉 data/ocr_cache 里对应的条目。见 docs/pitfalls.md。
     """
     return entries[0]["id"] if entries else ""
 
@@ -223,6 +242,18 @@ def _default_slots(providers: list) -> dict:
     }
 
 
+_BUILTIN_IDS = {b["id"] for b in BUILTIN_PROVIDERS}
+
+
+def _builtin_reasoning_effort(pid) -> str:
+    """内置家在我们**实测过**的基础上的默认推理强度；没测过 = 空串 = 一个字都不发。
+
+    ★ 只写实测过的：宁可让用户点「测试连接」自己验，也别替他猜 ——
+      猜错的代价是把参数发给不认它的家，换来一个静默换家的 400。
+    """
+    return BUILTIN_REASONING_EFFORT.get(str(pid or ""), "")
+
+
 def default_config() -> dict:
     """合成一份"什么都没配过"的默认配置（**只在内存里，绝不写库**）。
 
@@ -233,6 +264,8 @@ def default_config() -> dict:
     for b in BUILTIN_PROVIDERS:
         p = {k: v for k, v in b.items()}
         p["api_key"] = ""
+        # 推理强度按内置默认填好：用户**打开就是对的**，不需要先理解它是什么。
+        p["reasoning_effort"] = _builtin_reasoning_effort(b["id"])
         p["builtin"] = True
         providers.append(p)
     return {"version": CURRENT_VERSION,
@@ -257,8 +290,18 @@ def _normalize(raw: dict) -> dict:
         if b["id"] not in have:
             p = {k: v for k, v in b.items()}
             p["api_key"] = ""
+            p["reasoning_effort"] = _builtin_reasoning_effort(b["id"])
             p["builtin"] = True
             providers.append(p)
+
+    # 老配置回填「推理强度」（09-20 新加的字段）：库里存的那份没有这一栏时，
+    # 按内置默认补上 —— 否则**已经存过配置的老用户永远拿不到"glm 默认 low"**
+    # 这个我们实测出来的正确值（他们打开界面看到的是空白，又不知道要不要填）。
+    # ★ 判据是"键在不在"而不是"值空不空"（同 api_key 的三态）：用户**主动清空**过
+    #   的家，键是存在的、值为 ""，这里绝不能给他填回去 —— 那是覆盖用户的选择。
+    for p in providers:
+        if "reasoning_effort" not in p:
+            p["reasoning_effort"] = _builtin_reasoning_effort(p.get("id"))
 
     ids = {p.get("id") for p in providers}
     slots = {}
@@ -390,6 +433,14 @@ def _validate(cfg: dict) -> list[str]:
             problems.append(f"{_name(p)} 未填写名称")
         if not _scheme_ok(p.get("base_url")):
             problems.append(f"{_name(p)} 的「接口地址」需以 http:// 或 https:// 开头")
+        # ★ 取值卡死在这里，别让脏值流到运行时：发一个对端不认的档位 = 400 →
+        #   4xx 不重试 → 降级链**静默换家**，用户只会觉得"怎么换了模型/变笨了"。
+        #   留空是合法的（= 一个字都不发），所以只有非空才查。
+        eff = str(p.get("reasoning_effort") or "").strip()
+        if eff and eff not in REASONING_EFFORTS:
+            problems.append(
+                f"{_name(p)} 的「推理强度」只能填 "
+                f"{' / '.join(REASONING_EFFORTS)}，或留空不发（现在填的是：{eff[:20]}）")
         # ★ 09-14 从这里删掉了"必须填 text_model（通用模型）"那条检查，挪到下面的
         #   槽位循环里按**槽位**查。原来它在 provider 级，于是：
         #     · 只服务视频那一行的家（agnes 没有对话模型）会被要求填「通用模型」；
@@ -439,7 +490,8 @@ def save_config(user_id: str, incoming: dict) -> dict:
     # ★ 加一个新的模型名字段时**必须**同步加进这个元组，否则它会被静默丢掉
     #   （用户填了、保存也不报错，就是下次打开发现空了）。
     _KEEP = ("id", "label", "base_url", "text_model", "vision_model",
-             "route_model", "video_model", "key_env", "api_key")
+             "route_model", "video_model", "key_env", "api_key",
+             "reasoning_effort")
     cfg["providers"] = [{k: p[k] for k in _KEEP if k in p}
                         for p in (cfg.get("providers") or []) if isinstance(p, dict)]
 
@@ -532,7 +584,15 @@ def _entry(p: dict, slot: str, allow_env: bool) -> dict | None:
             "key_env": p.get("key_env") or "",
             "allow_env": allow_env,          # 给 Model 选报错文案用
             "model": model,
-            "slot": slot}
+            "slot": slot,
+            # 空串 = **一个字都不发**（不是"发个空的"）。见 REASONING_EFFORTS 的说明：
+            # 不认这个参数的家收到它会 400，而 400 会让降级链静默换家。
+            # ★★ 只对**通用模型（chat）**那一条生效，别的槽位一律空串、不发：
+            #    这是"对话要多想多久"的档位 —— 判词要的是快（它本来就有 10 秒总预算）、
+            #    视频压根不是对话模型、识图走的是另一条链。给它们发没有任何意义，
+            #    只会多一个"对端不认就 400 → 静默换家"的机会。
+            "reasoning_effort": ((p.get("reasoning_effort") or "").strip()
+                                 if slot == "chat" else "")}
 
 
 def resolve_one(user_id: str, provider_id: str, slot: str) -> list[dict]:
@@ -584,7 +644,7 @@ def presets() -> list[dict]:
 
 
 def probe_entry(user_id: str, provider_id: str,
-                slot: str = "") -> tuple[str, str, str, str]:
+                slot: str = "") -> tuple[str, str, str, str, str]:
     """给「试一下能不能用」端点用：从**已保存的**配置里取 (base_url, api_key, model, slot)。
 
     刻意只认已保存的 provider id、**不接受裸 URL** —— 这样"测试"这个动作对外能到达
@@ -596,6 +656,8 @@ def probe_entry(user_id: str, provider_id: str,
     ★ 09-14 起**多回一个"命中的是哪个槽位"**：调用方靠它判断"这个模型能不能用对话
       接口试连"（视频模型不能，见 PROBE_NOT_CHAT）。返回值从 3 元组变 4 元组，
       全仓只有 app/server.py 的测试端点一处解包（没有测试引用过它）。
+    ★ 09-20 再**多回第 5 个「推理强度」**（空串 = 不发）：端点用它做两趟探测，
+      把"参数被拒"和"连不上"分开报（见 app/server.py 的测试端点）。
     """
     cfg = load_config(user_id)
     p = _by_id(cfg, provider_id)
@@ -610,5 +672,13 @@ def probe_entry(user_id: str, provider_id: str,
             # 非站长在这里同样拿不到 .env 的 key —— 于是"测试连接"测的就是他真正
             # 会用的那把；否则会出现"测试通过、一说话就报缺 key"的假绿灯。
             return ((p.get("base_url") or "").strip(),
-                    _api_key(p, db.is_owner(user_id)), m, s)
+                    _api_key(p, db.is_owner(user_id)), m, s,
+                    # 第 5 个：这家填的「推理强度」（空串 = 不发）。
+                    # 端点拿它做**两趟探测** —— 先不带参数确认"连得上"，
+                    # 再带上参数确认"认不认"，好把"你的参数被拒了"和"你连不上"
+                    # 分开报，别让用户去改一个本来正确的地址。
+                    # ★ 与 _entry 同一口径：**只有命中通用模型那一行才验** ——
+                    #   别的槽位本来就不会发这个参数，验了反而误导（"这里标红"
+                    #   会让用户以为识图也受影响）。
+                    ((p.get("reasoning_effort") or "").strip() if s == "chat" else ""))
     raise ValueError("该来源尚未填写模型名，请填写后重试")

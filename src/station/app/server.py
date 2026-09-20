@@ -328,13 +328,20 @@ def test_model_config(body: ProviderTestIn, request: Request):
     3) max_tokens=1 + 8 秒超时：一次测试几分钱，也不会让对端写小作文。
     4) **只回异常类型名，不回 message** —— message 里可能含对端返回的片段；
        把 base_url 指向内网服务、再靠报错把内容读出来是经典的探测手法。
+
+    ★ 09-20 起**两趟**：第一趟不带任何附加参数（就是上面的"连得上吗"）；只有在
+      「推理强度」那一栏非空时，才多打一趟带上它，单独回报"这家认不认"。
+      为什么要分开报：**"参数被拒"和"连不上"是两回事**，混在一起显示成红叉，
+      用户会去改一个本来就正确的地址（同一个道理见 PROBE_NOT_CHAT 的注释）。
+      两趟都还是 max_tokens=1 + 8 秒超时，成本可以忽略。
     """
     u = require_user(request)
     if not _test_allowed(u["id"]):
         raise HTTPException(429, "测试过于频繁，请稍后重试")
     from station import modelcfg
     try:
-        url, key, model, hit_slot = modelcfg.probe_entry(u["id"], body.provider_id, body.slot)
+        url, key, model, hit_slot, effort = modelcfg.probe_entry(
+            u["id"], body.provider_id, body.slot)
     except ValueError as e:
         raise HTTPException(400, str(e))
     from urllib.parse import urlparse
@@ -361,12 +368,37 @@ def test_model_config(body: ProviderTestIn, request: Request):
         # 首次导入必须串行化，否则这里可能与对话/识别同时撞上"首次并发 import"竞态。
         # ★ 这个探针**刻意不套退避重试**：用户手点的"测试连接"应该立刻说真话，
         #   让他等 31 秒才看到"连不上"只会以为界面卡了。
-        from station.core.model import import_chat_openai
+        from station.core.model import import_chat_openai, reasoning_kwargs
         ChatOpenAI = import_chat_openai()
-        llm = ChatOpenAI(model=model, api_key=key, base_url=url or None,
-                         temperature=0, timeout=8, max_retries=0, max_tokens=1)
-        llm.invoke([{"role": "user", "content": "hi"}])
-        return {"ok": True, "ms": int((time.perf_counter() - t0) * 1000)}
+
+        def _try(eff: str) -> None:
+            """按给定推理强度打一次最小请求；失败就抛（调用方决定怎么报）。
+
+            eff 为空串 = 不带这个参数（第一趟就是这种）。
+            ★ 传参形状走 reasoning_kwargs —— 与真对话**同一处定义**，否则会出现
+              "探针说能用、真说话时却发了另一套参数"的偏差。
+            """
+            llm = ChatOpenAI(model=model, api_key=key, base_url=url or None,
+                             temperature=0, timeout=8, max_retries=0, max_tokens=1,
+                             **reasoning_kwargs(ChatOpenAI, eff))
+            llm.invoke([{"role": "user", "content": "hi"}])
+
+        _try("")                                   # 第一趟：地址/密钥/模型名对不对
+        out = {"ok": True, "ms": int((time.perf_counter() - t0) * 1000)}
+        if effort:
+            # 第二趟：这家认不认「推理强度」。★ 单独一趟、单独报，是为了让用户分得清
+            # "地址填错了"和"这个参数对端不收"—— 混在一起报会让他去改一个本来就
+            # 正确的地址（同 PROBE_NOT_CHAT 那条"假红灯比不测更糟"）。
+            # ★ 只在这一栏非空时才多打一次；留空的家（绝大多数）仍是一次调用。
+            t1 = time.perf_counter()
+            try:
+                _try(effort)
+                out["effort"] = {"value": effort, "accepted": True,
+                                 "ms": int((time.perf_counter() - t1) * 1000)}
+            except Exception as e:                # noqa：对端不收就如实回"不收"，不算错
+                out["effort"] = {"value": effort, "accepted": False,
+                                 "error": type(e).__name__}
+        return out
     except Exception as e:                        # noqa：连不上是常见情况，不算服务端错误
         name = type(e).__name__
         return {"ok": False, "error": name, "hint": _err_hint(name),

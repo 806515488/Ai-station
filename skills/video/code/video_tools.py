@@ -552,7 +552,7 @@ def build_runner(ctx, prompt: str = "", seconds: str = "5",
       {"type":"artifact","id":"<文件id>"}              登记产物
       {"type":"log","text":"…"}                        只留痕，不改进度条
     ★ 事件里**只放文字和 id，绝不放视频字节** —— 每个事件都会整行重写一次数据库，
-      而前端每秒把整个 log 拉一遍。塞几 MB 进去会同时压垮两边（见 conventions 坑区）。
+      而前端每秒把整个 log 拉一遍。塞几 MB 进去会同时压垮两边（见 docs/pitfalls.md）。
     ★★ **临时链接也绝不进事件、更不进 `job.args`**：前者经 `GET /api/jobs/{id}` 回给
       前端并落进 `jobs.log` 一列，后者落 `jobs.args` 一列 —— 两个地方都是明文长期保存的。
       所以签名这个动作**只在这里做**（make 只传 fid，URL 出了这个函数就没人知道）。

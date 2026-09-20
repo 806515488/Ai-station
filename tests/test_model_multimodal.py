@@ -86,13 +86,21 @@ def test_missing_content_keeps_old_behavior():
 
 
 def test_tool_call_messages_are_untouched():
-    """改动只碰"普通消息"那一支 —— 带 tool_calls 的助手消息与工具结果照旧。"""
+    """改动只碰"普通消息"那一支 —— 带 tool_calls 的助手消息与工具结果照旧。
+
+    ★ 09-20 更新：名字**会**被归一化（`demo.now` → `demo_now`）—— 那是发给模型的
+      协议名，规则见 core/model.py 的 wire_name，由 tests/test_tool_wire_names.py 专测。
+      本用例守的回到它真正关心的东西：**结构**没被那一支改动波及 ——
+      tool_calls 的 id 与 tool 消息的 tool_call_id 必须原样配对得上。
+    """
     msgs = [{"role": "assistant", "content": "我来调工具",
              "tool_calls": [{"id": "c1", "name": "demo.now", "arguments": {"a": 1}}]},
             {"role": "tool", "content": "结果", "tool_call_id": "c1", "name": "demo.now"}]
     out = _to_llm(msgs)
-    assert out[0]["tool_calls"][0]["function"]["name"] == "demo.now"
+    assert out[0]["tool_calls"][0]["function"]["name"] == "demo_now"
+    assert out[0]["tool_calls"][0]["id"] == "c1"
     assert out[1]["tool_call_id"] == "c1"
+    assert out[1]["name"] == "demo_now"          # 与 assistant 那一处必须同名
 
 
 # ── 收回来的方向：content blocks 要抽成文字 ──────────────────────────

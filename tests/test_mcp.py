@@ -4,7 +4,7 @@
   · 内置的 websearch server 是**真起子进程**、真走一遍 MCP 协议（stdio），
     只是让它跑在 `STATION_FAKE=1` 下 —— 那个模式下它不发任何网络请求，
     回一份固定的假结果（同 core/model.py 的 FakeModel 思路）。
-    ★ 这条重要：假响应证明不了真货（本仓踩过 —— 见 conventions 坑区"替身证明不了假设本身"），
+    ★ 这条重要：假响应证明不了真货（本仓踩过 —— 见 docs/pitfalls.md"替身证明不了假设本身"），
       所以这里能让真的那一层真跑，就让它真跑。
   · HTTP 传输用本地起的一个假 MCP server（随机端口）当靶子。
 
