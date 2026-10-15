@@ -225,6 +225,22 @@ def test_archive_chain_all_fail_raises():
     assert "a → b" in str(e.value)
 
 
+def test_archive_chain_marks_all_credential_failures_for_the_job_layer():
+    """全链都是 401 时，建档层必须能辨认这是“改 key”，不是坏图片。"""
+    from archive.engine.providers import ModelCredentialError, make_model
+
+    class AuthErr(Exception):
+        status_code = 401
+
+    bad = FakeLLM(err=AuthErr("invalid api key"))
+    ch = make_model("vision", entries=[_arc_entry("a", _llm=bad)], retries=0)
+    with pytest.raises(ModelCredentialError) as e:
+        ch.invoke([{"role": "user", "content": "x"}])
+    assert "模型配置错误：识图模型「a」" in str(e.value)
+    assert "invalid api key" not in str(e.value)  # 对端原始报文不能进用户可见 job.message
+    assert bad.calls == 1
+
+
 def test_archive_chain_keeps_multimodal_content():
     """★ 红线：识别链必须把多模态消息**原样**交给 langchain。
 

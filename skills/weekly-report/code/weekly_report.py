@@ -1,7 +1,7 @@
-"""weekly-report 技能代码 —— agent 型：收集本周要点 → 生成周报(md/docx) 并落盘到文件区。
+"""weekly-report 技能代码 —— agent 型：整理对话要点 → 生成周报(md/docx) 并落盘到文件区。
 
 tools() 返回叶子 Tool（registry 会补成 weekly.*）。全部本地执行、零外部依赖，
-数据源=笔记目录(默认 data/weekly-notes，没有则用仓库内示例) + 本仓 git log，
+素材只来自当前对话里用户已经说过的工作要点；不读取用户电脑/服务器目录，也不读写 Git。
 演示“skill 自带代码 + 多工具串联 + 产物落盘”的宿主扩展路径。
 
 新手视角：这是【第 3 种代码位置】的技能 —— 代码放在技能目录自己的 code/ 下，
@@ -10,51 +10,9 @@ registry 会在 import 时把这个目录临时加进 sys.path（原理见 regis
 """
 from __future__ import annotations
 
-import datetime
 import time
 
-from station import config as _cfg     # 拿仓库/数据路径（config 模块）
 from station.core.tool import Tool     # 工具“盒子”（见 tool.py）
-
-
-def _notes(notes_dir) -> list[str]:
-    """读一个目录下所有 .md，每个文件抽一句“标题/首行”返回。"""
-    from pathlib import Path            # 用到才 import
-    d = Path(notes_dir)
-    if not d.is_dir():                  # 目录不存在就返回空列表
-        return []
-    out = []
-    # sorted(d.glob("*.md"))：按文件名排序扫所有 md 文件（glob≈通配符匹配）
-    for p in sorted(d.glob("*.md")):
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:               # noqa  # 个别文件读不动就跳过，别中断整个任务
-            text = ""
-        head = "（无标题）"
-        # 取第一个非空行当“一句话要点”（去掉开头的 #）
-        for ln in text.splitlines():
-            s = ln.strip()
-            if s:
-                head = s.lstrip("#").strip()[:80]   # lstrip 去掉前导的 #；截 80 字
-                break
-        out.append(f"- {p.stem}：{head}")           # p.stem = 不含后缀的文件名
-    return out
-
-
-def _git_log(days: int) -> list[str]:
-    """跑 git 拿最近 N 天提交。用 subprocess≈Runtime.exec：起一个外部命令并读它的输出。"""
-    since = (datetime.date.today() - datetime.timedelta(days=max(1, days)))
-    try:
-        import subprocess
-        # 命令拆成一个 list（不拼字符串）→ 避免空格/注入问题，这是推荐写法
-        r = subprocess.run(
-            ["git", "-C", str(_cfg.REPO), "log", f"--since={since.isoformat()}",
-             "--pretty=format:%ad %h %s", "--date=format:%m-%d"],
-            capture_output=True, text=True, encoding="utf-8", timeout=10)
-        # splitlines 按行拆；过滤空行
-        return [ln for ln in r.stdout.splitlines() if ln.strip()]
-    except Exception:                   # noqa  # 没装 git / 不是 git 仓库都别崩
-        return []
 
 
 def _owner(ctx) -> str:
@@ -72,20 +30,20 @@ def _week_from_md(md: str) -> str:
     return time.strftime("%Y-W%W")
 
 
-def collect_highlights(ctx, days: int = 7, notes_dir: str = "") -> str:
-    """工具①：收集本周素材（笔记 + git 提交），返回一段 markdown 给模型当“材料”。"""
-    if not notes_dir:                   # 没指定笔记目录 → 自动选：用户 data 优先，否则示例
-        cand = _cfg.DATA_DIR / "weekly-notes"
-        cand2 = _cfg.REPO / "skills" / "weekly-report" / "notes"
-        notes_dir = cand if cand.is_dir() else cand2
-    notes = _notes(notes_dir)
-    git = _git_log(int(days or 7))
-    # 组一段结构化 markdown 返回（agent 拿到后决定怎么写进周报）
-    parts = [f"## 本周记录（近 {int(days)} 天）", "### 笔记要点"]
-    parts.extend(notes or ["（暂无笔记，可先建 data/weekly-notes/*.md）"])
-    parts.append("### git 提交")
-    parts.extend(git or ["（暂无 git 提交）"])
-    return "\n".join(parts)
+def collect_highlights(ctx) -> str:
+    """工具①：只整理当前对话里用户已提供的要点，不读取目录或 Git。"""
+    thread = getattr(ctx, "thread", None)
+    msgs = list(getattr(thread, "msgs", []) or [])
+    # 当前会话的用户原话就是本技能唯一可承诺的素材来源；取全部而非只取最后一句，
+    # 用户常在“帮我写周报”之后分几条补充完成事项、数据和计划。
+    texts = [str(m.get("content") or "").strip() for m in msgs
+             if isinstance(m, dict) and m.get("role") == "user"
+             and str(m.get("content") or "").strip()]
+    if not texts:
+        return ("还没有收到可写入周报的工作要点。请用户补充：本周完成、数据/进展、"
+                "遇到的问题和下周计划。")
+    return "## 用户在本次对话中提供的周报要点\n" + "\n".join(
+        f"- {text}" for text in texts)
 
 
 def render_report(ctx, content: str = "", week: str = "") -> str:
@@ -151,14 +109,12 @@ def export_docx(ctx, file_id: str = "", content: str = "") -> str:
 
 
 def tools() -> list[Tool]:
-    """暴露本技能的工具清单（registry 会注册成 weekly.*）。写周报的“三步” = 这三个工具。"""
+    """暴露本技能的工具清单（registry 会注册成 weekly.*）。"""
     return [
-        Tool(name="collect_highlights", label="收集本周素材",
-             description="收集本周素材：扫笔记目录(data/weekly-notes 或示例) + 本仓 git 近 N 天提交，"
-                         "返回待整理的要点 markdown。写周报前务必先调它拿素材。",
-             run=collect_highlights,
-             args=[{"name": "days", "type": "int", "desc": "回溯天数(默认7)", "required": False},
-                   {"name": "notes_dir", "type": "str", "desc": "笔记目录(可省)", "required": False}]),
+        Tool(name="collect_highlights", label="整理已提供要点",
+             description="整理当前对话中用户已经提供的工作要点。不读取用户电脑、服务器目录或 Git。"
+                         "若用户只说“写周报”而没有具体事项，应先请他补充完成、进展、问题和计划。",
+             run=collect_highlights),
         Tool(name="render_report", label="生成周报",
              description="把素材内容渲染成一份《工作周报》markdown 并落盘到文件区，返回产物下载信息。",
              run=render_report,

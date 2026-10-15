@@ -69,11 +69,39 @@ PROVIDERS = {
 #    **改这里就得改那边，反之亦然。**
 RETRY_WAITS = (1.0, 2.0, 4.0, 8.0, 16.0)   # 最多重试 5 次，合计约 31 秒
 
+
+class ModelCredentialError(RuntimeError):
+    """模型凭据不可用，继续识别只会得到整卷空页卡。
+
+    这是一个可由识别流水线辨认的错误类型：普通单页读图失败仍然允许降级为
+    待人工核对的空卡；但 401/403 或根本未配置 key 时，所有后续页面都会以
+    同样原因失败，必须立刻结束后台任务并提示用户修配置。
+    """
+
+
 _TRANSIENT_NAMES = frozenset({              # 传输层"连不上/读不到"的异常类名
     "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
     "RemoteProtocolError", "TransportError", "NetworkError",
     "APIConnectionError", "APITimeoutError", "InternalServerError",
 })
+
+
+def _status_code(err) -> int | None:
+    """兼容 OpenAI/httpx 两种异常形状取 HTTP 状态码。"""
+    code = getattr(err, "status_code", None)
+    if not isinstance(code, int):
+        code = getattr(getattr(err, "response", None), "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _is_credential_error(err) -> bool:
+    """401/403 与 OpenAI 鉴权异常都是配置问题，不应被逐页吞掉。"""
+    if isinstance(err, ModelCredentialError):
+        return True
+    if _status_code(err) in (401, 403):
+        return True
+    return any(k.__name__ in {"AuthenticationError", "OpenAIAuthenticationError",
+                              "PermissionDeniedError"} for k in type(err).__mro__)
 
 
 def _is_transient(err) -> bool:
@@ -83,9 +111,7 @@ def _is_transient(err) -> bool:
     4xx 一律不重试（鉴权错、模型名错、**429 配额**都是"再试也没用"）；没有状态码
     就看异常类名；最后兜住"首次并发 import"那个 `partially initialized module`。
     """
-    code = getattr(err, "status_code", None)
-    if not isinstance(code, int):
-        code = getattr(getattr(err, "response", None), "status_code", None)
+    code = _status_code(err)
     if isinstance(code, int):
         return code >= 500 or code == 408
     # ★ 走**整条继承链**（理由见 station 侧同名函数的注释：真抛的是子类
@@ -174,7 +200,7 @@ class _Chain:
         key = (entry.get("api_key") or "").strip()
         if not key:
             env_name = entry.get("key_env") or ""
-            raise RuntimeError(
+            raise ModelCredentialError(
                 f"{entry.get('id')} 未配置 key"
                 + (f"（{env_name}，见 src/.env；或在界面「模型配置」里直接填）"
                    if env_name else "（在界面「模型配置」里填）"))
@@ -212,18 +238,28 @@ class _Chain:
         里的 try 兜住、给这页一张"空卡"进待核对（既有行为，不变）。
         """
         last: Exception | None = None
+        failures: list[Exception] = []
         for rnd in range(self._retries + 1):
             for entry in self._entries:
                 try:
                     return self._client(entry).invoke(msgs)
                 except Exception as e:         # noqa：这一家不行 → 换下一家
                     last = e
+                    failures.append(e)
             wait = self._retry_wait(rnd)
             if wait is None or not _is_transient(last):
                 break                           # 注定失败或轮次用完 → 别再干等
             self._notify_retry(rnd + 1, wait, last)
             time.sleep(wait)
         tried = " → ".join(str(e.get("id")) for e in self._entries)
+        # 全链都是凭据问题时，不能让 node_mark 把它伪装成一张张“待核对”的空卡。
+        # 用户会直接看到 Job.message，所以这里绝不能带上对端原始 JSON / request id；
+        # 原始异常仍作为 __cause__ 保留，JobManager 写进内部任务日志供排查。
+        if failures and all(_is_credential_error(e) for e in failures):
+            kind = "识图模型" if self._kind == "vision" else "模型"
+            raise ModelCredentialError(
+                f"模型配置错误：{kind}「{tried}」的 API Key 无效、无权限或未配置。"
+                "请在右上角「模型配置」更新后重新开始任务。") from last
         raise RuntimeError(
             f"所有通道都失败了（试过 {tried}）：{type(last).__name__}: {last}")
 

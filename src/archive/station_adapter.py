@@ -98,6 +98,11 @@ def _iter_flow(records, llm_text, llm_vision, vision_channel="", sink=None,
                     yield {"type": "progress", "percent": _percent(node),
                            "message": _NODE_LABELS[node]}
     except Exception as e:                       # noqa
+        # 凭据问题要原样到 JobManager：它会显示“模型凭据无效”，而不是被包成
+        # 笼统的“识别链失败”。普通引擎异常仍保留上下文，方便定位节点。
+        from archive.engine.providers import ModelCredentialError
+        if isinstance(e, ModelCredentialError):
+            raise
         raise RuntimeError(f"识别链失败: {type(e).__name__}: {e}") from e
     if sink is not None:
         sink.update(merged)                      # 最终状态（materials/issues/…）交回调用方

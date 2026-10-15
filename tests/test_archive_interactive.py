@@ -153,6 +153,32 @@ def test_node_mark_emits_one_page_event_per_page(tmp_path, monkeypatch):
     assert "img" not in e                               # ★ 不带图/不带 URL：URL 是上站层补的
 
 
+def test_node_mark_stops_after_first_page_when_model_credentials_are_invalid(tmp_path, monkeypatch):
+    """401/缺 key 不能并发吞成一整卷空卡：第一张预检失败就应立即结束任务。"""
+    from archive.engine import graph, providers
+
+    files = []
+    for i in (1, 2, 3):
+        p = tmp_path / f"{i}.jpg"
+        p.write_bytes(b"not-an-image-but-it-will-not-be-sent")
+        files.append(p)
+    recs = [{"seq": i, "path": str(p), "md5": f"m{i}", "ocr": {}, "flags": []}
+            for i, p in enumerate(files, 1)]
+
+    class BadVision:
+        calls = 0
+
+        def invoke(self, _msgs):
+            self.calls += 1
+            raise providers.ModelCredentialError("模型凭据无效或未配置（试过 qwen）")
+
+    llm = BadVision()
+    with pytest.raises(providers.ModelCredentialError):
+        graph.node_mark({"records": recs, "vision_channel": "qwen",
+                         "llm_vision": llm, "refresh": True})
+    assert llm.calls == 1
+
+
 def test_iter_flow_relays_page_events_from_custom_stream(tmp_path, monkeypatch):
     """整条识别链离线跑通：page 事件能从 LangGraph 的 custom 流里透出来。
 

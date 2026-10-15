@@ -49,6 +49,8 @@ dist/
 htmlcov/
 .tox/
 .venv/
+.document-deps/
+.document-test-artifacts/
 
 # ── AI 工具本地状态（各人机器不一样，不入库）──
 # settings.local.json 会被 harness 自动追加权限白名单，提交它等于把每台机器的

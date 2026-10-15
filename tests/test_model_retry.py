@@ -358,10 +358,12 @@ def test_archive_chain_does_not_retry_on_missing_key(monkeypatch, fast_retry):
     seen: list = []
     chain = archive_providers._Chain("text", [_arc_entry("a", api_key="")],
                                      on_retry=seen.append)
-    with pytest.raises(RuntimeError) as e:
+    # 整条链都是凭据问题时，_Chain.invoke 尾部会把它收敛成一句人话
+    # （"识图凭据快速失败"那次改的），不再是裸的「a 未配置 key」。
+    with pytest.raises(archive_providers.ModelCredentialError) as e:
         chain.invoke([{"role": "user", "content": "hi"}])
-    assert "未配置 key" in str(e.value)
-    assert seen == []
+    assert "无效、无权限或未配置" in str(e.value)
+    assert seen == []          # 立刻抛，不退避、不干等
 
 
 # ── 后台面板：重连文案要写进 job，且不许冲掉进度 ──────────────────────

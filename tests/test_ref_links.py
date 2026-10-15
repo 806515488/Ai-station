@@ -186,7 +186,9 @@ def test_ref_endpoint_404_when_file_gone(with_public_base):
     token = share.make_ref_link(fid, "u1")
     p = fs.path(fid)
     p.unlink()
-    (p.parent / (fid + ".json")).unlink()
+    mp = fs._meta_path(fid)
+    assert mp is not None
+    mp.unlink()
     assert _client().get(f"/api/ref/{token}").status_code == 404
 
 

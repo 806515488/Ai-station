@@ -192,6 +192,12 @@ def test_index_html_knows_video_card_and_slot():
     assert "_jobShown" in html, "少了「已画过面板」的守卫（会重复画面板或干脆不画）"
     assert "jobFailReason" in html, "失败原因没被取出来（只会显示一句「详情见任务日志」）"
     assert "showEnded" in html, "收尾态不再画面板 —— 快速失败又会变回静默"
+    assert "jobCredentialFailHtml" in html, "模型凭据失败没有专属的可操作错误卡"
+    assert "打开模型配置" in html, "凭据错误卡缺少直接修复入口"
+    # ★★ 会话切换期间，旧 SSE 流不能把 delta/tool/card 追加到新会话；只靠 threadId
+    # 不够（用户可切走再切回同一 id），必须有单调的视图代次来辨认“这是不是原来的页面”。
+    assert "viewEpoch" in html, "缺少会话视图代次：旧 SSE 流会污染切换后的会话"
+    assert "const ownsView=" in html, "流式事件没有按发起会话隔离"
 
 
 def test_index_html_knows_portrait_upload():
@@ -680,7 +686,7 @@ def test_real_archive_tools_have_previews():
 
 
 def test_weekly_multi_tool_chain(tmp_path):
-    """验证多工具串联：写周报 = collect_highlights → render_report → 产物落盘。"""
+    """验证多工具串联：整理对话要点 → 生成周报 → 产物落盘。"""
     from station.files import store as fs
     skill = get_registry().get("weekly-report")
     ctx, thread, model = _ctx(skill)
@@ -695,6 +701,17 @@ def test_weekly_multi_tool_chain(tmp_path):
     have = list(fs.iter_files())
     assert any(f["name"].startswith("周报") and f["name"].endswith(".md")
                for f in have)
+
+
+def test_weekly_collects_only_user_conversation_points():
+    """周报素材只来自本次对话，不能悄悄读取部署机目录或 Git 历史。"""
+    skill = get_registry().get("weekly-report")
+    ctx, thread, _model = _ctx(skill)
+    thread.add_user("本周完成了登录问题排查，并部署了修复。")
+    tool = next(t for t in skill.tools if t.leaf() == "collect_highlights")
+    got = tool.run(ctx)
+    assert "登录问题排查" in got
+    assert "git 提交" not in got and "笔记目录" not in got
 
 
 # ── 流式输出（模型逐字吐字）──────────────────────────────────────

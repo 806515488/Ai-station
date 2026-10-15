@@ -3,8 +3,8 @@
 设计原则：工具不是全局的，所以路由层绝不直接返回 archive.set_category 这类
 具体工具名。它只回答一个问题：“这句话该交给哪个技能？”
   L1  本地关键词/正则（零成本）：出件/改类/OCR/写周报等明确话术 → skill；
-  L2  qwen-flash 拿“skill 描述 + 工具用途提炼的话术锚点”做语义判断，
-      自报 confidence，过阈值才输出 skill_id；
+  L2  意图识别链（普通聊天模型 / Jev System One）拿“skill 描述 + 工具用途提炼的话术锚点”做语义判断，
+      校验置信度与白名单，过阈值才输出 skill_id；
   L3  前两层都没把握 → 交给通用聊天/活跃技能 agent，由该技能自己用工具兜底。
 
 技能被选中后，server 才 get_skill() 加载它的 tools；工具的选择留在技能内
@@ -54,6 +54,7 @@ def l1_route(text: str, skill_ids: set[str]) -> RouteHit | None:
     has_archive = "archive" in skill_ids
     has_weekly = "weekly-report" in skill_ids
     has_video = "video" in skill_ids
+    has_interview = "interview-coach" in skill_ids
 
     if (has_archive and any(k in t for k in
             ("干部档案", "档案整理", "整理档案", "翻拍照片", "上传照片", "选照片",
@@ -73,6 +74,12 @@ def l1_route(text: str, skill_ids: set[str]) -> RouteHit | None:
 
     if has_weekly and ("周报" in t or "本周总结" in t or "写总结" in t):
         return RouteHit(skill_id="weekly-report")
+
+    if has_interview and any(k in t for k in (
+            "面试复盘", "面试视频", "面试录音", "面试音频", "面试问答",
+            "提取音频", "视频转音频", "ffmpeg", "FFmpeg", "整理面试问答",
+            "逐题复盘", "改进面试回答", "面试表现总结")):
+        return RouteHit(skill_id="interview-coach")
 
     # 视频排在最后：档案/周报的正则更具体，别被"视频"这种宽词先接走。
     # ★「视频」这两个字必须收 —— 草稿卡上的按钮预填的就是"…生成视频吧"，
@@ -99,6 +106,7 @@ _SWITCH_ROOTS = {
     "archive": ("档案", "翻拍", "卷", "出件", "材料清单", "全景", "口径", "文种"),
     "weekly-report": ("周报", "总结"),
     "video": ("视频", "短片", "动画", "出镜"),
+    "interview-coach": ("面试", "复盘", "音频", "ffmpeg", "FFmpeg", "转写", "文字稿"),
 }
 
 
@@ -114,23 +122,6 @@ def may_switch_to(text: str, target: str, active: str) -> bool:
         return True                      # 没登记的技能不限制
     t = text or ""
     return any(r in t for r in roots)
-
-
-def _parse_json(text: str) -> dict | None:
-    """从模型回答里抠出 JSON（先整体试，再抠第一个 {…} 块）。"""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:                     # noqa：模型可能夹带解释文字
-        pass
-    m = re.search(r"\{.*\}", text, re.S)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:                 # noqa
-            return None
-    return None
 
 
 def _note(diag: dict | None, **kw) -> None:
@@ -196,75 +187,23 @@ def l2_route(text: str, catalog: list, diag: dict | None = None,
     if os.environ.get("STATION_FAKE") == "1":
         _note(diag, reason="fake", ms=0.0)
         return None
-    ids = {c.id for c in catalog}
     t0 = time.perf_counter()
     try:
-        from station.core.model import Model
         from station import modelcfg
-        threshold = float(os.environ.get("ROUTE_THRESHOLD")
-                          or config.ROUTE_THRESHOLD)
-        # 短超时 + 不重试：判词只是“加速通道”，慢或挂了就该立刻降级给主 agent，
-        # 而不是让用户在输入框前干等（实测这条链路偶发 5 秒级）。
+        from station.core.intent import identify
         timeout = float(os.environ.get("ROUTE_TIMEOUT") or config.ROUTE_TIMEOUT)
-        # 判词走「路由判词」槽位的降级链（用户在界面「模型配置」里选，默认就是
-        # ROUTE_CHANNEL 指定的那家）。★ total_budget 必须传 timeout ——
-        # 1.5 秒是**整条链一共**的预算，不是每条链各 1.5 秒；否则用户给判词排了
-        # 3 家时就要等 4.5 秒，等于把 09-10 刚修好的卡顿原样还回来。
-        # ★ retries=0：**判词槽不许退避重连**（09-15 加）。上面那条"不重试"现在
-        #   由这个参数显式保证 —— 默认 5 次的退避会把这 10 秒预算整条吃掉，
-        #   判词就不再是"加速通道"而是"先卡 31 秒再说"了。
-        model = Model("text", timeout=timeout, max_retries=0,
-                      entries=modelcfg.resolve(user_id, "route"),
-                      total_budget=timeout, retries=0)
-        skill_lines = []
-        for c in catalog:
-            skill_lines.append(
-                f"- {c.id}：{c.name}。{c.description} "
-                f"用户常见说法：{c.hints}")
-        skill_lines.append(
-            '- ""：普通闲聊/开放问题/都不确定')
-        prompt = (
-            "你是 station 的技能路由判词器，只负责判断这句话该交给哪个技能。\n"
-            "技能清单（含用户常见说法，用于理解话术，不是让你调用工具）：\n"
-            + "\n".join(skill_lines)
-            + '\n只输出一个 JSON：{"skill":"上面的id或空串","confidence":0~1}\n'
-            f"confidence 低于 {threshold:.2f} 时也把 skill 设为空串。\n"
-            f"用户输入：{text}\n")
-        # ★ 硬截止包住整次调用（含建连）：Model 那边的 timeout 只作用到 httpx 的
-        #   单个阶段，兜不住总时长 —— 见 _with_deadline 的注释。
-        resp = _with_deadline(
-            lambda: model.respond([{"role": "user", "content": prompt}], None),
-            timeout)
-        d = _parse_json(resp.get("content") or "")
-    except RouteDeadline:                        # 我们自己的墙钟预算用完了
-        _note(diag, reason="timeout",
-              ms=round((time.perf_counter() - t0) * 1000, 1))
+        threshold = float(os.environ.get("ROUTE_THRESHOLD") or config.ROUTE_THRESHOLD)
+        decision, details = identify(
+            text, catalog, modelcfg.resolve(user_id, "route"), threshold=threshold,
+            timeout=timeout, with_deadline=_with_deadline, deadline_error=RouteDeadline)
+        _note(diag, **details)
+    except Exception as exc:
+        _note(diag, reason=f"error:{type(exc).__name__}")
+        decision = None
+    _note(diag, ms=round((time.perf_counter() - t0) * 1000, 1))
+    if decision is None:
         return None
-    except Exception as e:                       # noqa：没 key/调用失败/对端超时 → 上层兜底
-        _note(diag, reason=f"error:{type(e).__name__}",
-              ms=round((time.perf_counter() - t0) * 1000, 1))
-        return None
-    ms = round((time.perf_counter() - t0) * 1000, 1)
-    if not d:
-        _note(diag, reason="bad_json", ms=ms)
-        return None
-    try:                                         # 模型偶尔把 confidence 写成非数字
-        confidence = float(d.get("confidence") or 0)
-    except (TypeError, ValueError):
-        _note(diag, reason="bad_confidence", raw=d.get("confidence"), ms=ms)
-        return None
-    skill = str(d.get("skill") or "").strip()
-    if confidence < threshold:
-        _note(diag, skill=skill, conf=confidence, reason="below_threshold", ms=ms)
-        return None
-    if skill == "":
-        _note(diag, skill="", conf=confidence, reason="chat", ms=ms)
-        return RouteHit(skill_id="", level="l2", confidence=confidence)
-    if skill in ids:
-        _note(diag, skill=skill, conf=confidence, reason="hit", ms=ms)
-        return RouteHit(skill_id=skill, level="l2", confidence=confidence)
-    _note(diag, skill=skill, conf=confidence, reason="unknown_skill", ms=ms)
-    return None
+    return RouteHit(skill_id=decision["skill"], level="l2", confidence=decision["conf"])
 
 
 def log_route(entry: dict) -> None:

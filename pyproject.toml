@@ -25,6 +25,10 @@ dependencies = [
     "reportlab>=3.6",
     "pypdf>=3",
     "requests>=2.25",
+    "httpx>=0.27",  # System One: async cancellation enforces the total request budget
+    # PostgreSQL 生产驱动。SQLite 仍由 Python 标准库支持，用于本地离线测试与
+    # 一次性迁移的源库；运行时设置 STATION_DATABASE_URL 后才会实际连接 PG。
+    "psycopg[binary]>=3.2,<4",
     # —— MCP 客户端（09-16 起是**主依赖**，不再是"预留"）——
     # 宿主把外部 MCP server 的工具接进对话（station/mcp/），内置的 websearch 本身
     # 也是一个 stdio MCP server —— 少了这个包，整个 MCP 那一层都不存在。
@@ -42,18 +46,30 @@ dependencies = [
 
 [project.optional-dependencies]
 docx = ["python-docx>=1.1"]        # weekly-report 的 export_docx
-dev = ["pytest>=8", "httpx>=0.27"] # 跑离线测试
+dev = ["pytest>=8"] # 跑离线测试（httpx 已是主依赖）
+documents = [
+    # 文档处理依赖固定版本：联网构建一次后，Loader/cleaners/splitter 离线调用。
+    "langchain-community==0.4.1",
+    "langchain-text-splitters==1.1.1",
+    "langchain-unstructured==1.0.1",
+    "unstructured[xlsx]==0.20.6",
+    "docx2txt==0.9",
+    "psutil>=7,<8",
+    "tzdata>=2025",
+]
 
 [project.scripts]
 station-web = "station.app.server:main"   # 一键起站：pip install -e .[dev]; station-web
 archive-cli = "archive.engine.run:main"   # archive 引擎 CLI（无 Web，调试用）
+station-migrate-postgres = "station.migrate:main"  # SQLite 元数据一次性导入 PostgreSQL
+station-upgrade-postgres = "station.upgrade:main"  # 显式升级既有 PostgreSQL schema
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["station*", "archive*"]
 
 [tool.setuptools.package-data]
-"station" = ["app/static/*"]
+"station" = ["app/static/*", "documents/schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

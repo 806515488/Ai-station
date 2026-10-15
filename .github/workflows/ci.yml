@@ -13,8 +13,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,docx,documents]"
+      - name: Prepare local document resources
+        run: python scripts/prepare_document_resources.py --output-dir .document-deps/nltk_data
       - name: Compile check
         run: python -m compileall -q src
       - name: Offline tests
+        env:
+          STATION_DOCUMENT_NLTK_DATA: ${{ github.workspace }}/.document-deps/nltk_data
         run: pytest -q

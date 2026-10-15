@@ -12,15 +12,29 @@ services:
     build:
       context: .
       args:
-        # 大陆的机器从 pypi.org 装 langchain 这一大家子会慢到离谱；服务器在腾讯云内，
-        # 走它的 PyPI 镜像最快。不想要就删掉这两行（Dockerfile 会回落到默认 PyPI）。
-        PIP_INDEX: "https://mirrors.cloud.tencent.com/pypi/simple/"
+        # 大陆的机器从 pypi.org 装 langchain 这一大家子会慢到离谱；走国内的 PyPI 镜像最快。
+        # ★ 09-… 在这台阿里云上实测（`pip download pillow`）：阿里云公网源 83s、
+        #   清华 4.5s、腾讯 4.5s、中科大 4.1s —— 阿里云那个**慢 20 倍**，别用。
+        # 不想要就删掉这两行（Dockerfile 会回落到默认 PyPI）。
+        PIP_INDEX: "https://pypi.tuna.tsinghua.edu.cn/simple"
     image: station-ai:latest
     container_name: station
     restart: unless-stopped
 
+    # 应用要连 PG：等它健康再起，免得"容器起来了、第一次碰数据库就报错"。
+    depends_on:
+      postgres:
+        condition: service_healthy
+
     ports:
       - "8443:8443"
+
+    # ★★ 模型 API key 从同目录的 `.env` 注入容器（key 放环境变量、不进代码/不进镜像的标准做法）。
+    #   这个文件被 .gitignore 挡住，不入库；也被 .dockerignore 挡住，不烤进镜像。
+    #   没有这一项，容器里**一个 key 都没有** —— 通用/识图/语音/视频全调不动，
+    #   只能由站长进界面 ⚙「模型配置」手动填（那样就只有那一个账号能用）。
+    env_file:
+      - .env
 
     environment:
       # ★ 容器里**必须**绑 0.0.0.0。绑 127.0.0.1 的话只有容器自己连得上，
@@ -40,6 +54,13 @@ services:
       #       STATION_PUBLIC_BASE=https://你的域名或公网IP:8443
       #   docker compose 会自动读它做这里的变量替换。没配就是空串。
       STATION_PUBLIC_BASE: "${STATION_PUBLIC_BASE:-}"
+      # ★ 数据库连接串。**留空 = 回落本地 SQLite**（本机开发就是这样）；
+      #   生产填 postgresql://station:<口令>@postgres:5432/station —— 主机名用
+      #   compose 网络里的服务名 `postgres`，**不需要**走公网那条路。
+      # ★★ 口令里的 `@` 必须写成 `%40`：连接串里 `@` 是"用户信息/主机"的分隔符，
+      #   不编码的话 libpq 会把口令从 `@` 处截断，报"认证失败"。
+      # ★ 真值放同目录 .env（不入库）——它含口令，且随部署环境变。
+      STATION_DATABASE_URL: "${STATION_DATABASE_URL:-}"
 
     volumes:
       # ★★ 唯一会丢用户数据的地方 ★★
@@ -47,11 +68,62 @@ services:
       # （compose down / 重新 build）档案就全没了 —— 而且是静默的：容器照常起来，
       # 只是里面是空的。这一行是这个文件里最重要的一行。
       - /srv/station/data:/app/data
+      # ★ 附件解析（unstructured）需要的 NLTK 分词资源（punkt_tab / averaged_perceptron_tagger_eng，
+      #   约 22MB）。它不走 pip 也不进镜像 —— 构建机（这台阿里云）连不上 NLTK 的默认源
+      #   GitHub raw，Dockerfile 里的下载会跳过，于是**靠这一行从宿主机挂进来**；容器里的
+      #   NLTK_DATA=/opt/station-nltk 正好指向它。
+      #   ★ 和 data/ 那行一样是必需的：目录空着不报错、容器照起，只会在**上传附件解析时**才失败。
+      #   更新资源：替换 /srv/station/nltk 里的文件后 `docker compose restart station` 即可，不用重建镜像。
+      - /srv/station/nltk:/opt/station-nltk:ro
       # 证书只读挂进去（容器没有理由写它）
       - /srv/station/certs:/certs:ro
 
-    # cgroup 硬上限（宿主机 1.9G，留出系统 + dockerd 的余量）。
+    # cgroup 硬上限（宿主机 3.5G，留出系统 + dockerd 的余量）。
     # 有它：超了死的是这个容器，`docker inspect` 一眼看得出是 OOM，服务重启即可。
     # 没它：内核在**宿主机**上随机挑一个受害者 —— 可能挑到 sshd，那你就连不上机器了。
     # 配合 src/station/core/heavy.py 的重活闸（同时只跑一件吃内存的活）一起用。
-    mem_limit: 1400m
+    mem_limit: 2600m
+
+  # ── PostgreSQL ───────────────────────────────────────────────────
+  # 应用连它走 compose 网络内的服务名 `postgres:5432`（不出机器，也不需要外网）。
+  # 对外映射 5432 只是给"本机用 Navicat/DBeaver 连过去看"用的。
+  # ★★ **必须**在云安全组把源 IP 限死成自己的出口 IP，**绝不要开 0.0.0.0/0**：
+  #    公网对 5432 的扫描是全天候的，而这台机器**没有主机防火墙**（ufw inactive），
+  #    安全组是唯一的墙。
+  postgres:
+    image: postgres:17-alpine
+    container_name: station-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: station
+      POSTGRES_USER: station
+      # ★ 密码不写死在这里（本文件会进公开仓库），走同目录 .env 的 PG_PASSWORD。
+      #   ":?" = 没配就直接报错退出，而不是悄悄用个空密码起来。
+      POSTGRES_PASSWORD: "${PG_PASSWORD:?PG_PASSWORD 未配置，见 .env}"
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      # 数据库文件是**持久状态**，跟 data/ 同级别重要：容器一删没挂卷就全没了
+      - /srv/station/pgdata:/var/lib/postgresql/data
+
+    # 宿主机 3.5G（已加 2G swap）：PG 的内存必须收敛。默认 max_connections=100
+    # 配合 work_mem 能顶到几百 MB；这里压到 30 条连接、4MB work_mem。
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=30
+      - -c
+      - work_mem=4MB
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U station -d station"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    mem_limit: 900m

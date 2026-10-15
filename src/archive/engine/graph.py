@@ -322,6 +322,10 @@ def node_mark(state):
                 ocr_cache.store(md5, channel, prompt, card,
                                 model=getattr(llm, "model_name", ""))
             return r["seq"], card, False
+        except providers.ModelCredentialError:
+            # 401/403、缺 key 属于整条识图链的配置错误；不能伪装成单页读图失败。
+            # node_mark 外层的首张预检会立即把它交给 JobManager 标红。
+            raise
         except Exception as e:                    # noqa
             # 单页失败不拖垮整卷：给一个“建档失败”的空卡，进待核对
             return r["seq"], _empty_mark(f"建档失败 {type(e).__name__}"), False
@@ -331,14 +335,30 @@ def node_mark(state):
     cached_n = 0                                   # 统计本批命中缓存的页数（给进度文案）
     emit = _page_writer()                          # 页级事件出口（图外调用时是空函数）
     total = len(recs)                              # 总页数，给前端拼"第 N / 总数 张"
+
+    def _accept(result):
+        """收下一页结果、写回记录并通知进度；串行预检和并发阶段共用。"""
+        nonlocal cached_n
+        seq, ocr, was_cached = result
+        if was_cached:
+            cached_n += 1
+        updated[seq] = {**updated[seq], "ocr": ocr}
+        emit(_page_event(updated[seq], total, was_cached))
+
+    # ★ 先找一张真的需要请求模型的图做串行预检，再开 6 路并发。
+    # 若首个视觉请求返回 401/403（或缺 key），_one 会把 ModelCredentialError 原样抛出，
+    # 整卷立即失败；否则旧实现会同时发出 6 个必失败请求、再把每页悄悄存成空卡，
+    # 用户最终只会看到“识别完成但没有内容”。全命中缓存的卷则顺序取第一张即可。
+    def _needs_model(r):
+        md5 = r.get("md5") or ""
+        return bool(state.get("refresh")) or not (md5 and ocr_cache.lookup(md5, channel, prompt))
+
+    preflight = next((r for r in todo if _needs_model(r)), todo[0])
+    _accept(_one(preflight))                       # 凭据错在这里立即中止，绝不提交其余页
+    remaining = [r for r in todo if r is not preflight]
     with ThreadPoolExecutor(max_workers=6) as ex:
-        for fut in as_completed([ex.submit(_one, r) for r in todo]):
-            seq, ocr, was_cached = fut.result()   # 每完成一个就取它的 (seq, 内容卡, 命中?)
-            if was_cached:
-                cached_n += 1
-            updated[seq] = {**updated[seq], "ocr": ocr}   # 用 {**dict} 生成新 dict 替换
-            # 每读完一页立刻往外报一条（缓存命中的也报）——前端进度面板靠它逐张刷新
-            emit(_page_event(updated[seq], total, was_cached))
+        for fut in as_completed([ex.submit(_one, r) for r in remaining]):
+            _accept(fut.result())                  # 每完成一个就收回 (seq, 内容卡, 命中?)
     # 保持原来的卷序返回（只更新 ocr 字段）；ocr_cached 一并返回——
     # adapter 从 stream 的节点更新里收出它，给前端显示"本次命中缓存 N 页（省了 N 页的钱）"
     return {"records": [updated[r["seq"]] for r in recs], "ocr_cached": cached_n}
@@ -419,6 +439,8 @@ def node_resolve(state):
             f"；{_card(by_seq[c['seqs'][0]])}" for c in batch)
         try:
             got = _extract_json(str(llm.invoke(loader.resolve(lines, host_lines)).content))
+        except providers.ModelCredentialError:
+            raise                                        # 凭据错整卷都无意义，立即报到任务面板
         except Exception:                             # noqa：解析失败/调用炸 → 这一批不猜
             failed += len(batch)
             continue

@@ -24,9 +24,11 @@ DATA_DIR = REPO / "data" / "station"                  # 运行时数据（已在
 # ---- 默认模型通道 -----------------------------------------------------
 # 文本/text 默认 glm，视觉/vision 默认 qwen（沿用 archive 口径；可被 .env 覆盖）
 # video 是 09-14 加的第四类：目前只有 Agnes AI 一家提供，所以默认就是它。
+# speech/语音识别没有内置服务商，默认为空；用户配置自己的 ASR 来源后可在界面选择。
 # ★ 加这条不只是"多个默认值"——channel_for() 是直接 DEFAULT_CHANNEL[kind] 取值的，
 #   少一个键就是 KeyError（modelcfg._default_slots 会在零配置时踩它）。
-DEFAULT_CHANNEL = {"text": "glm", "vision": "qwen", "video": "agnes"}
+DEFAULT_CHANNEL = {"text": "glm", "vision": "qwen", "video": "agnes",
+                   "speech": ""}
 
 # ---- 宿主开关（也能用环境变量临时覆盖，见 .env.example）----------------
 MAX_STEPS = int(os.environ.get("STATION_MAX_STEPS", "10"))   # agent 一轮最多工具步数
@@ -41,6 +43,36 @@ ROUTE_TIMEOUT = float(os.environ.get("ROUTE_TIMEOUT", "10"))         # L2 判词
 #   ~350ms，10 秒只是个上限。等待期间前端有"正在理解…"的等待态（见 static/index.html），
 #   不会让人以为卡死。这个值可以用 ROUTE_TIMEOUT 环境变量覆盖。
 ROUTE_LOG = os.environ.get("ROUTE_LOG", "1") == "1"                  # 1=每次路由判定写 data/station/route_log.jsonl（校准阈值用）
+
+
+def database_url() -> str:
+    """返回宿主数据库连接串；空串表示仍使用本地 SQLite。
+
+    生产环境统一用 ``STATION_DATABASE_URL``，避免与其他同机服务泛用的
+    ``DATABASE_URL`` 撞名；后者保留为兼容入口。值必须是 PostgreSQL 的
+    ``postgresql://``（或 ``postgres://``）连接串。这里刻意在每次调用时读环境：
+    ``load_env()`` 在应用启动阶段才执行，写成模块常量会静默漏掉部署 `.env`。
+    """
+    load_env()
+    return (os.environ.get("STATION_DATABASE_URL")
+            or os.environ.get("DATABASE_URL") or "").strip()
+
+
+def database_lock_timeout_ms() -> int:
+    """PostgreSQL 等待表锁的最长时间（毫秒）。
+
+    这是锁等待上限，不是普通 SQL 的执行时间上限。默认 5 秒：正常请求拿锁应当是
+    瞬时的；若超过这个时间，多半是遗留事务，宁可明确报错也不能让登录请求无限挂起。
+    """
+    load_env()
+    raw = (os.environ.get("STATION_DB_LOCK_TIMEOUT_MS") or "5000").strip()
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError("STATION_DB_LOCK_TIMEOUT_MS 必须是正整数（毫秒）") from e
+    if value <= 0:
+        raise ValueError("STATION_DB_LOCK_TIMEOUT_MS 必须大于 0（毫秒）")
+    return value
 
 
 def load_env() -> dict:

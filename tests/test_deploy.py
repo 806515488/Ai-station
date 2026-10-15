@@ -81,6 +81,21 @@ def test_compose_mounts_the_data_volume():
     assert "/srv/station/data:/app/data" in txt
 
 
+def test_compose_mounts_the_nltk_resources():
+    """★ 附件解析要的 NLTK 数据文件（punkt_tab 等）在本机构建时下不来（NLTK 默认源
+    GitHub raw 被 reset），只能靠挂载顶上。和 data 卷一样是**静默**失败：目录空着
+    容器照起、界面照开，只在上传附件解析时才报错。
+
+    挂载点必须与镜像里的 `NLTK_DATA` 一字不差 —— 两边是手写的两份，漂移了也不报错。
+    """
+    compose = (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "/srv/station/nltk:/opt/station-nltk" in compose, \
+        "compose 没有挂 NLTK 资源 —— 这台机器构建时下不来，附件解析会失败"
+    dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "NLTK_DATA=/opt/station-nltk" in dockerfile, \
+        "镜像的 NLTK_DATA 与挂载点不一致 —— 资源挂在别处、程序却去别处找"
+
+
 def test_compose_declares_public_base():
     """★ 对外地址必须出现在 compose 里，但**值要从环境变量取**。
 

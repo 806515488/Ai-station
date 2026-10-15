@@ -30,6 +30,11 @@ def _tmp_data(monkeypatch, tmp_path):
     """
     from station import config
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")  # 数据全进临时目录
+    # 测试永远只碰临时 SQLite。既清空可能继承的连接串，也禁止 load_env() 把开发机
+    # 的 .env 又读回来；否则离线测试可能把测试数据写进真 PostgreSQL。
+    monkeypatch.delenv("STATION_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(config, "load_env", lambda: {})
     monkeypatch.setattr(config, "AUTO_APPROVE", False)          # 别依赖环境变量
     # SQLite 也指到临时目录（DB_PATH 是模块级常量、连接是单例 → 都要重置）
     import station.db as db

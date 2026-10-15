@@ -193,8 +193,12 @@ def run_agent(ctx: Context, thread, skill, model):
         #      "还在跑"这种过期副本（留了反而会让模型照旧话续）。
         try:
             msgs = thread.msgs
+            # 附件按原轮次加入模型资料消息，页面仍然只回放用户原话。
+            if getattr(ctx, "document_inputs", None):
+                from station.documents.inputs import messages as document_messages
+                msgs = document_messages(thread.msgs, ctx.document_inputs)
             if sys_prompt:
-                msgs = [{"role": "system", "content": sys_prompt}, *thread.msgs]
+                msgs = [{"role": "system", "content": sys_prompt}, *msgs]
             # 流式拿回复：模型吐一小片就立刻 yield 给前端（逐字显示），
             # 整段跑完再给出 final（与 respond 的返回值同形），用于判断要不要调工具。
             resp = None

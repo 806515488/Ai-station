@@ -208,7 +208,28 @@
   .prog .jmeta .kv{grid-template-columns:46px 1fr;margin-top:2px}
   .prog progress::-webkit-progress-bar{background:var(--panel);border-radius:4px}
   .prog progress::-webkit-progress-value{background:var(--acc);border-radius:4px}
+  /* 后台任务失败不能把第三方原始报文平铺成一长行：原因、处理入口和任务号分层展示。 */
+  .prog .jfail{border:1px solid color-mix(in srgb,var(--err) 48%,var(--line));
+               border-radius:10px;background:color-mix(in srgb,var(--err) 7%,var(--panel));
+               padding:12px;line-height:1.55}
+  .prog .jfail-head{display:flex;align-items:flex-start;gap:10px}
+  .prog .jfail-icon{display:grid;place-items:center;width:28px;height:28px;flex:none;
+                    border-radius:50%;background:color-mix(in srgb,var(--err) 18%,transparent);
+                    font-size:15px}
+  .prog .jfail-title{font-weight:700;color:var(--fg)}
+  .prog .jfail-reason{color:var(--dim);font-size:12px;margin-top:2px;overflow-wrap:anywhere}
+  .prog .jfail-tip{margin:10px 0 0;padding:8px 10px;border-radius:7px;
+                   background:var(--panel2);font-size:12px;color:var(--fg)}
+  .prog .jfail .row{margin:10px 0 0}
   #composer{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
+  #attachmentDrafts{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px;max-height:120px;overflow:auto}
+  #attachmentDrafts:not(:empty){padding-top:8px;padding-bottom:8px}
+  .attachment-draft{border:1px solid var(--line);border-radius:6px;padding:3px 7px;color:var(--dim)}
+  .document-card .document-rows{white-space:normal;font-size:13px}
+  .document-tree{padding:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+  .document-tree details{padding-left:10px;margin:5px 0}
+  .document-tree summary{cursor:pointer;color:var(--fg)}
+  .document-tree a{display:block;color:var(--acc);padding:2px 0}
   #composer input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 12px}
   .row{display:flex;align-items:center;gap:8px;margin:8px 0}
   .hint{color:var(--dim);font-size:12px}
@@ -426,7 +447,10 @@
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div id="msgs"></div>
-      <div id="composer"><input id="inp" placeholder="直接说要做什么…">
+      <div id="attachmentDrafts"></div>
+      <div id="composer"><button class="ghost" id="btnUploadDocument" title="上传文档作为对话附件">上传文件</button>
+        <input type="file" id="documentPicker" multiple accept=".txt,.md,.csv,.tsv,.pdf,.docx,.xlsx,.html,.htm" hidden>
+        <input id="inp" placeholder="直接说要做什么…">
         <button id="btnSend">发送</button></div>
     </div>
   </div>
@@ -507,6 +531,9 @@
 <script>
 const $=s=>document.querySelector(s);
 let threadId=null, me=null;
+// 当前正在看的会话的代次。切会话不等于取消旧的 HTTP 流，但旧流从这一刻起绝不能再
+// 写进新的 #msgs；用递增代次而不是只比 threadId，能区分“切走又切回同一会话”。
+let viewEpoch=0;
 let _jobWatchers={}, _prodGroups=[];   // job进度观察 / 产物组缓存
 // _jobShown：**已经画过进度面板**的 job（只增不删）。
 // 与 _jobWatchers 分开是因为生命周期不同：_jobWatchers 在轮询结束时会被删掉（那是
@@ -588,11 +615,14 @@ function markHistory(){
     el.classList.toggle("sel", el.dataset.id===threadId));
 }
 function newChat(){
+  viewEpoch++;
   threadId=null;
-  clearPending();                 // 上一条还挂着等待态的话，别让它跟着漂到新会话里
+  documentDrafts=[]; documentRetry=null; paintDocumentDrafts();
+  resetViewEphemera();            // 上一条还挂着等待态/待绘制文字，别让它漂到新会话里
   $("#msgs").innerHTML="";
   localStorage.removeItem("stLast");
   markHistory();
+  setSend(true);                  // 旧会话的流在后台继续，但新会话可以立刻开始新一轮
   $("#inp").focus();
 }
 async function refreshHistory(){
@@ -612,9 +642,11 @@ async function refreshHistory(){
   }catch(e){ /* 网络抖动同样静默：保留上一次的列表，用户仍可新开对话 */ }
 }
 async function openThread(id, sd){
+  const epoch=++viewEpoch;        // 先登记“用户想看谁”：慢响应回来也不能抢回后点的会话
   const data=sd||await (await fetch(`/api/sessions/${id}`)).json();
-  if(!data||data.msgs===undefined) return;
-  clearPending();                 // 切会话时同理：等待态是"这一次发送"的，不该跨会话
+  if(epoch!==viewEpoch || !data||data.msgs===undefined) return;
+  resetViewEphemera();            // 切会话时同理：等待态/流式气泡都属于发起它的那一轮
+  documentDrafts=[]; documentRetry=null; paintDocumentDrafts();
   threadId=id; $("#msgs").innerHTML="";
   (data.msgs||[]).forEach(m=>{
     if(m.role==="render"&&m.card){ renderCard(m.card); return; }
@@ -635,6 +667,10 @@ async function openThread(id, sd){
   localStorage.setItem("stLast",JSON.stringify({thread:id}));
   markHistory();
   watchThreadJob(data);       // 会话若还有识别任务在跑，接上进度
+  setSend(true);              // 不让旧会话的慢流锁住当前会话的输入框
+  (data.attachment_turns||[]).forEach(t=>{
+    if(!document.querySelector(`.document-card[data-turn="${t.id}"]`)) showDocumentCard({turn_id:t.id,thread_id:id});
+  });
   $("#inp").focus();
 }
 $("#histList").onclick=e=>{
@@ -780,6 +816,11 @@ function paintDelta(){                     // 把累积到的文字画进当前�
   const m=$("#msgs"); m.scrollTop=m.scrollHeight;   // 逐字追加时跟着滚，否则看不到新字
 }
 function breakBubble(){ box=null; acc=""; }
+function resetViewEphemera(){
+  clearPending();
+  breakBubble();
+  if(raf){ cancelAnimationFrame(raf); raf=0; }
+}
 
 // —— 等待态（见上面 .pending 的样式注释）——
 // 生命周期：send() 时出现 → stage 事件换一次文案 → 第一个 delta/tool/render/出错时消失。
@@ -833,17 +874,33 @@ function setPendingRetry(ev){
 }
 
 async function send(text,opts={}){
-  if(!opts.fromApprove){ addMsg("u",esc(text)); }
+  // 这一次请求只归属于发起时正在看的那张会话。SSE 不支持从浏览器端安全地
+  // “取消且让服务端停算”，因此切走时让它继续落库，但绝不允许污染新会话的 DOM。
+  const epoch=viewEpoch, requestedThreadId=threadId;
+  documentSendEpochs.set(epoch,(documentSendEpochs.get(epoch)||0)+1);
+  let streamThreadId=requestedThreadId;
+  const ownsView=()=>viewEpoch===epoch && threadId===streamThreadId;
+  if(!opts.fromApprove&&!opts.resumeTurn&&!opts.hideUser){ addMsg("u",esc(text)); }
   breakBubble(); setSend(false);
   // 先"正在理解"——路由（判词）这一段最长，先给个交代，别让界面一片死寂
   showPending("正在理解你的意思…");
   try{
     const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:text,thread_id:threadId})});
+      body:JSON.stringify({message:text,thread_id:requestedThreadId,
+        attachment_ids:opts.attachmentIds||[],client_turn_id:opts.clientTurn||"",
+        resume_turn_id:opts.resumeTurn||"",retry_agent:!!opts.retryAgent})});
     await readSSE(resp,ev=>{
-      if(ev.type==="meta"){ threadId=ev.thread_id;
+      if(ev.type==="meta"){
+        streamThreadId=ev.thread_id||streamThreadId;
+        if(viewEpoch!==epoch) return;       // 已切会话：只让服务端继续写历史
+        threadId=streamThreadId;
         localStorage.setItem("stLast",JSON.stringify({thread:threadId}));
         markHistory(); refreshHistory(); }
+      else if(!ownsView()){
+        // 不渲染旧会话的 stage/delta/tool/card/错误；完成时只刷新左侧历史，让它可回看。
+        if(ev.type==="done") refreshHistory();
+        return;
+      }
       else if(ev.type==="stage"){ setPending(ev.text||"正在思考…"); }   // 路由结束、开始生成
       // 模型连不上、正在退避重连（服务端 core/model.py 的 RETRY_WAITS）：等待态里报倒计时
       else if(ev.type==="retry"){ setPendingRetry(ev); }
@@ -856,17 +913,214 @@ async function send(text,opts={}){
       }
       else if(ev.type==="tool"){ clearPending(); addMsg("tool",toolChip(ev)); breakBubble(); }
       else if(ev.type==="render"&&ev.card){ clearPending(); renderCard(ev.card); breakBubble(); }   // 渲染即工具：卡片长在对话流里
+      else if(ev.type==="attachment_wait"){
+        documentDrafts=[];documentRetry=null;paintDocumentDrafts();
+        watchDocumentTurn(ev.turn_id,streamThreadId);
+      }
       else if(ev.type==="approval_request"){
         clearPending(); showAppr(ev.tool,ev.label,ev.arguments,ev.preview); breakBubble();
       }
       else if(ev.type==="error"){ clearPending(); addMsg("err",esc(ev.text||"出错")); breakBubble(); }
-      else if(ev.type==="done"){ refreshHistory(); syncThreadJob(); }
+      else if(ev.type==="done"){ refreshHistory(); syncThreadJob(streamThreadId); }
     });
-  }catch(e){ clearPending(); addMsg("err",esc("请求失败："+e)); }
-  finally{ clearPending();                                              // 兜底：任何出口都别留下等待态
-           if(raf){ cancelAnimationFrame(raf); raf=0; } paintDelta();   // 把最后一帧画完
-           setSend(true); refreshProducts(); }
+  }catch(e){ if(ownsView()){ clearPending(); addMsg("err",esc("请求失败："+e)); } }
+  finally{
+    documentSendEpochs.set(epoch,Math.max(0,(documentSendEpochs.get(epoch)||1)-1));
+    if(ownsView()){
+      clearPending();                                                    // 兜底：任何出口都别留下等待态
+      if(raf){ cancelAnimationFrame(raf); raf=0; } paintDelta();         // 把最后一帧画完
+      setSend(true);
+    }
+    refreshProducts();
+  }
 }
+// ── 宿主文档附件：上传只登记草稿，发送后后台处理；轮询始终绑定原会话视图。 ──
+let documentDrafts=[], documentRetry=null;
+const documentSendEpochs=new Map(), documentWatches=new Map();
+function paintDocumentDrafts(){
+  $("#attachmentDrafts").innerHTML=documentDrafts.map((d,i)=>
+    `<span class="attachment-draft">${esc(d.name)} · ${esc(d.error||d.status||"已上传")}
+      <button class="ghost mini" onclick="removeDocumentDraft(${i})" aria-label="移除附件">×</button></span>`).join("");
+}
+async function removeDocumentDraft(i){
+  const [draft]=documentDrafts.splice(i,1);documentRetry=null;paintDocumentDrafts();
+  if(draft?.id)await fetch(`/api/documents/${draft.id}`,{method:"DELETE"}).catch(()=>{});
+}
+$("#btnUploadDocument").onclick=()=>$("#documentPicker").click();
+$("#documentPicker").onchange=async()=>{
+  const files=[...$("#documentPicker").files], epoch=viewEpoch;
+  $("#documentPicker").value="";
+  if(!files.length)return;
+  const placeholders=files.map(f=>({name:f.name,status:"上传中"}));
+  documentDrafts.push(...placeholders);paintDocumentDrafts();
+  const form=new FormData();files.forEach(f=>form.append("files",f));
+  form.append("client_upload_id",crypto.randomUUID());
+  try{
+    const response=await fetch("/api/documents/upload",{method:"POST",body:form});
+    const data=await response.json();
+    if(viewEpoch!==epoch)return;
+    documentDrafts=documentDrafts.filter(d=>!placeholders.includes(d));
+    if(!response.ok)throw new Error(data.detail||"上传失败");
+    documentDrafts.push(...(data.documents||[]).map(d=>({...d,status:"已上传"})));
+    for(const e of data.errors||[])documentDrafts.push({name:e.name,error:e.message});
+  }catch(e){
+    if(viewEpoch===epoch){
+      documentDrafts=documentDrafts.filter(d=>!placeholders.includes(d));
+      files.forEach(f=>documentDrafts.push({name:f.name,error:String(e.message||e)}));
+    }
+  }finally{if(viewEpoch===epoch)paintDocumentDrafts();}
+};
+function sendWithDocuments(){
+  if(documentDrafts.some(d=>d.status==="上传中")){addMsg("err","请等附件上传完成再发送。");return;}
+  const ids=documentDrafts.filter(d=>d.id).map(d=>d.id);
+  let text=$("#inp").value.trim();
+  if(!text&&!ids.length)return;
+  if(!text)text="请阅读附件，说明内容和处理情况";
+  const same=documentRetry&&documentRetry.text===text&&JSON.stringify(documentRetry.ids)===JSON.stringify(ids);
+  const clientTurn=same?documentRetry.key:crypto.randomUUID();
+  documentRetry=ids.length?{text,ids,key:clientTurn}:null;
+  $("#inp").value="";
+  send(text,{attachmentIds:ids,clientTurn,hideUser:!!same});
+}
+function showDocumentCard(card){
+  const existing=document.querySelector(`.document-card[data-turn="${card.turn_id}"]`);
+  if(existing)return existing;
+  const node=document.createElement("div");node.className="card-m document-card";
+  node.dataset.turn=card.turn_id;
+  node.innerHTML='<div class="caph">附件处理</div><div class="document-rows">正在读取状态…</div>';
+  $("#msgs").appendChild(node);
+  watchDocumentTurn(card.turn_id,card.thread_id);
+  return node;
+}
+function documentState(state){return ({uploaded:"已上传",parsing:"解析中",parsed_ready:"正文可用，正在切块",
+  partial:"正文已保留，切块未完成",
+  completed:"处理完成",failed:"处理失败",waiting_parse:"正在处理",ready:"正文已准备好",running_agent:"正在回答",
+  done:"已完成",cancelled:"已取消",interrupted:"已中断"})[state]||state;}
+function documentQuality(state){return ({accepted:"检查通过",needs_review:"需要核对",partial:"部分内容缺失",unusable:"无可用正文"})[state]||state;}
+async function watchDocumentTurn(turnId,targetThread){
+  const epoch=viewEpoch, previous=documentWatches.get(turnId);
+  if(previous&&previous.epoch===epoch)return;
+  const token={epoch};documentWatches.set(turnId,token);
+  const owns=()=>viewEpoch===epoch&&(!targetThread||threadId===targetThread)&&documentWatches.get(turnId)===token;
+  while(owns()){
+    try{
+      const response=await fetch(`/api/documents/turns/${turnId}`);
+      if(!owns())break;
+      if(!response.ok)throw new Error("暂时无法读取附件状态");
+      const data=await response.json();if(!owns())break;
+      const node=document.querySelector(`.document-card[data-turn="${turnId}"] .document-rows`);
+      if(node){
+        const rows=(data.documents||[]).map(d=>{
+          const last=(d.runs||[]).find(r=>r.id===d.latest_run)||{};
+          return `<div><b>${esc(d.name)}</b> · ${esc(documentState(d.status))}
+            ${last.blocks!==undefined?` · ${last.blocks} 个内容块 / ${last.chunks||0} 个片段`:""}
+            ${last.quality&&last.quality!=="accepted"?` · ${esc(documentQuality(last.quality))}`:""}
+            ${d.error?`<div class="hint">${esc(d.error)}</div>`:""}</div>`;
+        }).join("");
+        const retry=["failed","interrupted"].includes(data.state)&&data.thread_id?
+          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true})">重试回答</button>`:"";
+        const cancel=data.state==="waiting_parse"?
+          `<button class="ghost mini" onclick="cancelDocumentTurn('${turnId}')">取消处理</button>`:"";
+        node.innerHTML=rows+`<div class="hint">${esc(data.job?.message||documentState(data.state))}</div>`+
+          `<button class="ghost mini" onclick="toggleProducts(true)">查看产物</button> ${cancel} ${retry}`;
+      }
+      // 初始 SSE 完成后才恢复，防止两个流同时使用同一组气泡/等待态变量。
+      if(data.state==="ready"&&data.thread_id&&!data.blocked_by_approval&&!(documentSendEpochs.get(epoch)||0)){
+        token.resumed=true;
+        await send("",{resumeTurn:turnId});
+        if(!owns())break;
+      }
+      if(["failed","interrupted","cancelled"].includes(data.state)||
+         (data.job&&["done","failed"].includes(data.job.status)&&["done","ready"].includes(data.state))){
+        refreshProducts();break;
+      }
+    }catch(e){
+      const node=document.querySelector(`.document-card[data-turn="${turnId}"] .document-rows`);
+      if(owns()&&node)node.textContent=String(e.message||e)+"，稍后重试。";
+    }
+    await new Promise(resolve=>setTimeout(resolve,800));
+  }
+  if(documentWatches.get(turnId)===token)documentWatches.delete(turnId);
+}
+async function cancelDocumentTurn(id){
+  const r=await fetch(`/api/documents/turns/${id}/cancel`,{method:"POST"});
+  if(!r.ok){const d=await r.json();addMsg("err",esc(d.detail||"取消失败"));}
+}
+let documentProductRows=[], nextDocumentOffset=null;
+function renderDocumentProducts(rows,offset=null,append=false){
+  documentProductRows=append?[...new Map([...documentProductRows,...rows].map(d=>[d.id,d])).values()]:rows;
+  nextDocumentOffset=offset;
+  document.querySelector('#prodList .document-tree')?.remove();
+  if(!documentProductRows.length&&offset===null)return;
+  $("#prodList .empty")?.remove();
+  const dates={};documentProductRows.forEach(d=>(dates[d.date]??=[]).push(d));
+  const tree=document.createElement("details");tree.className="document-tree";tree.open=true;
+  tree.innerHTML='<summary><b>orignChunk</b></summary>'+Object.entries(dates).map(([date,docs])=>
+    `<details open><summary>${esc(date)}</summary>${docs.map(d=>
+      `<details data-document="${d.id}" ontoggle="loadDocumentProduct(this)">
+        <summary>${esc(d.name)} · ${esc(documentState(d.status))}</summary><div class="document-files">正在读取…</div>
+      </details>`).join("")}</details>`).join("")+
+    (offset!==null?'<button class="ghost mini" onclick="moreDocumentProducts(this)">加载更多文档</button>':'');
+  $("#prodList").prepend(tree);
+}
+async function moreDocumentProducts(button){
+  button.disabled=true;
+  try{
+    const r=await fetch('/api/files?document_offset='+nextDocumentOffset),d=await r.json();
+    if(!r.ok)throw new Error(d.detail||'读取失败');
+    renderDocumentProducts(d.documents||[],d.next_document_offset??null,true);
+  }catch(e){button.disabled=false;addMsg('err',esc(String(e.message||e)));}
+}
+async function loadDocumentProduct(node){
+  if(!node.open||node.dataset.loaded)return;
+  node.dataset.loaded="1";
+  const id=node.dataset.document;
+  try{
+    const response=await fetch(`/api/documents/${id}`), data=await response.json();
+    if(!response.ok)throw new Error(data.detail||"读取失败");
+    const files=data.files||[], runs=data.runs||[];
+    node.querySelector(".document-files").innerHTML=
+      files.filter(f=>!f.run_id).map(f=>`<a href="${esc(f.url)}?dl=1">原件：${esc(f.name)}</a>`).join("")+
+      runs.filter(r=>r.manifest).map((r,i)=>`<details ${r.id===data.latest_run?"open":""}>
+        <summary>版本 ${i+1} · ${esc(documentState(r.state))} · ${esc(documentQuality(r.quality||""))}</summary>
+        <a href="/api/documents/${id}/archive?run_id=${r.id}">下载完整结果包</a>
+        ${documentFileTree(files.filter(f=>f.run_id===r.id))}</details>`).join("")+
+      `<button class="ghost mini" onclick="reprocessDocument('${id}',this)">重新解析与切块</button>`;
+  }catch(e){node.dataset.loaded="";node.querySelector(".document-files").textContent=String(e.message||e);}
+}
+function documentFileTree(files){
+  const root={};
+  files.forEach(f=>{const parts=(f.path||f.name).split("/");let node=root;
+    parts.slice(0,-1).forEach(p=>{node=node[p]??={};});node[parts.at(-1)]=f;});
+  const render=node=>Object.entries(node).sort(([a],[b])=>a.localeCompare(b,"zh",{numeric:true})).map(([name,value])=>
+    value.url?`<div><a style="display:inline-block" href="${esc(value.url)}?dl=1">${esc(name)}</a>
+      <button class="ghost mini" onclick="previewDocumentFile('${value.url}',this)">预览</button></div>`:
+      `<details open><summary>${esc(name)}</summary>${render(value)}</details>`).join("");
+  return render(root);
+}
+async function previewDocumentFile(url,button){
+  const container=button.parentElement, old=container.querySelector("pre");
+  if(old){old.remove();return;}
+  button.disabled=true;
+  try{
+    const response=await fetch(url+"?preview=1"), data=await response.json();
+    if(!response.ok)throw new Error(data.detail||"预览失败");
+    const node=document.createElement("pre");node.style="max-height:260px;overflow:auto;white-space:pre-wrap;font-size:11px";
+    node.textContent=data.text+(data.truncated?"\n（预览仅显示前 64000 个字符，下载可取得完整内容）":"");
+    container.appendChild(node);
+  }catch(e){addMsg("err",esc(String(e.message||e)));}
+  finally{button.disabled=false;}
+}
+async function reprocessDocument(id,button){
+  button.disabled=true;
+  try{
+    const response=await fetch(`/api/documents/${id}/process`,{method:"POST"});
+    const data=await response.json();if(!response.ok)throw new Error(data.detail||"重试失败");
+    showDocumentCard({turn_id:data.id,thread_id:threadId});
+  }catch(e){addMsg("err",esc(String(e.message||e)));}
+  finally{button.disabled=false;refreshProducts();}
+}
+
 // ── 批准卡 ───────────────────────────────────────────────────────────
 // ★ 显示 **`Tool.label`（人话）**，不是 `archive.apply_learning` 这种内部名 ——
 //   用户看不懂后者（conventions 里 09-12 那条规矩就是为这个定的）。
@@ -904,11 +1158,12 @@ function showAppr(tool,label,args,preview){
   return d;
 }
 function approve(allow){ send(allow?"允许":"拒绝",{fromApprove:true}); }
-function setSend(on){ $("#btnSend").disabled=!on; $("#inp").disabled=!on; }
-async function syncThreadJob(){
-  if(!threadId) return;
+function setSend(on){ $("#btnSend").disabled=!on; $("#inp").disabled=!on; $("#btnUploadDocument").disabled=!on; }
+async function syncThreadJob(tid=threadId){
+  if(!tid || threadId!==tid) return;
   try{
-    const sd=await (await fetch(`/api/sessions/${threadId}`)).json();
+    const sd=await (await fetch(`/api/sessions/${tid}`)).json();
+    if(threadId!==tid) return;             // 请求途中切走了：别把旧 job 卡追加到新会话
     // showEnded：这里是"一个对话回合刚结束"，刚刚发生的事（哪怕是失败）必须让用户看见
     watchThreadJob(sd, true);
   }catch(e){ /* 会话可能刚切走 */ }
@@ -930,6 +1185,7 @@ function fileRow(f){ const href=f.url||("/api/files/"+f.id);
     <span class="act">打开</span></a>`; }
 
 function renderCard(card){
+  if(card.type==="attachments") return showDocumentCard(card);
   const fn=RENDERERS[card.type];
   if(!fn){ addMsg("tool","（未知卡片类型："+esc(card.type)+"）"); return; }
   const d=document.createElement("div"); d.className="card-m";
@@ -1289,6 +1545,13 @@ const RENDERERS={
         onclick="ptGo(this)">开始上传</button>
       <input class="upfin" type="file" accept="image/*" multiple
         style="display:none" onchange="ptPick(this)">`
+    :c.purpose==="audio"?`<div class="caph">🎧 <b>上传面试音频</b></div>
+      <div class="upc" data-interview="${esc(c.interview_id||"")}" onclick="auOpen(this)"><b>${esc(c.hint||"选择本地提取好的面试音频")}</b>
+        <div class="hint upcnt">还没有选音频</div></div>
+      <button class="mini upgo" style="display:none;margin-top:8px"
+        onclick="auGo(this)">开始上传</button>
+      <input class="upfin" type="file" accept=".m4a,.mp3,.wav,.aac,.flac,.ogg,.oga,.opus,.webm,audio/*"
+        style="display:none" onchange="auPick(this)">`
     :`<div class="caph">📁 <b>选择翻拍照片</b></div>
       <div class="upname"><label>干部姓名</label>
         <input class="upnm" type="text" placeholder="没填我会先问你"></div>
@@ -1345,6 +1608,13 @@ const RENDERERS={
       </div>
       <div class="row" style="margin:6px 0 0"><button class="mini" id="dcardAdopt">采用新读法</button></div>`;
   },
+  "interview-card":c=>`<div class="caph">🎤 <b>${esc(c.title||"当前面试")}</b><span>${esc(c.status||"")}</span></div>
+    ${(c.recordings||[]).length?`<div class="hint">${(c.recordings||[]).map(r=>`第${esc(r.sequence)}段 · ${esc(r.name||"未命名音频")} · ${esc(r.status)}`).join("<br>")}</div>`:`<div class="hint">还没有音频</div>`}
+    <div class="row"><button class="mini" onclick="prefill('上传面试音频')">追加音频</button><button class="ghost mini" onclick="prefill('读取当前面试转写稿')">读取转写</button></div>`,
+  "interview-questions-card":c=>`<div class="caph">🧩 <b>面试题目</b><span>${(c.items||[]).length} 道</span></div>
+    ${(c.items||[]).map(q=>`<div class="mrow" onclick="prefill('查看题目 ${esc(q.id)}')"><span class="tt">第${esc(q.sequence)}题 · ${esc(q.question)}</span><span class="doubt">${esc(q.status)}</span></div>`).join("")||'<div class="hint">暂无题目</div>'}`,
+  "interview-actions-card":c=>`<div class="caph">✅ <b>练习行动项</b></div>
+    ${(c.items||[]).map(a=>`<div class="mrow" onclick="prefill('把行动项 ${esc(a.id)} 标为完成')"><span class="tt">${esc(a.title)}</span><span class="doubt">${esc(a.status)}</span></div>`).join("")||'<div class="hint">暂无行动项</div>'}`,
   // 口径学习卡：系统学到的识图口径，等用户点头才写进《文种对照》。
   // ★ 按钮只**预填一句确认话术**（与其他卡片一致）—— 真正落盘由模型调
   //   archive.apply_learning 完成，而它是 approve 类：用户还要再点一次「允许」。
@@ -1458,6 +1728,37 @@ async function ptGo(btn){
   send(`人像照片已上传，用于视频参考（${d.count} 张）`);
 }
 
+// ── 面试音频上传卡动作：选音频 → POST /api/interview/audio ─────────────
+function auOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
+function auPick(input){
+  const card=upCard(input), f=input.files&&input.files[0];
+  if(!f) return;
+  card._audio=f;
+  card.querySelector(".upc").classList.add("sel");
+  const go=card.querySelector(".upgo"); if(go) go.style.display="";
+  const cnt=card.querySelector(".upcnt");
+  if(cnt) cnt.textContent=`已选：${f.name}（${(f.size/1024/1024).toFixed(1)} MB）—— 点「开始上传」`;
+}
+async function auGo(btn){
+  const card=upCard(btn), f=card._audio, cnt=card.querySelector(".upcnt");
+  if(!f) return;
+  if(cnt) cnt.textContent="正在上传音频…";
+  const fd=new FormData(); fd.append("file",f,f.name);
+  // 上传卡由 interview.ask_audio 绑定一次面试档案；即使用户上传后切了会话，
+  // 服务端仍按这张卡的 interview_id 归档，不靠“当前最近一次任务”猜。
+  const iid=card.querySelector(".upc")?.dataset.interview||"";
+  if(iid) fd.append("interview_id",iid);
+  let r,d;
+  try{ r=await fetch("/api/interview/audio",{method:"POST",body:fd}); }
+  catch(e){ if(cnt) cnt.textContent="上传失败："+e.message; return; }
+  d=await r.json().catch(()=>({}));
+  if(!d.file){ if(cnt) cnt.textContent=(d.detail||d.error||"上传失败，请重试"); return; }
+  if(cnt) cnt.textContent=`已上传：${d.name}`;
+  const go=card.querySelector(".upgo"); if(go) go.style.display="none";
+  const mb=(Number(d.size||0)/1024/1024).toFixed(1);
+  send(`面试音频已上传：${d.file}（${d.name}，${mb} MB）`);
+}
+
 // ── 终版目录上传卡动作：选 xlsx → POST /api/archive/reconcile → 把路径发给 agent ──
 // 同"照片上传"一样是**两步制**（选完先攒着、点按钮才真传），事件一律内联 + 相对查找。
 function recOpen(box){ const f=upCard(box).querySelector(".upfin"); if(f) f.click(); }
@@ -1551,6 +1852,9 @@ const JOB_WORDS={
                src="${u}"></video>
                <div class="row" style="margin:6px 0 0"><a class="mini"
                  style="text-decoration:none" href="${u}?dl=1" download="AI视频.mp4">下载 mp4</a></div>`;}},
+  "interview-coach":{doing:"转写中",done:"转写完成",failed:"转写失败",
+           btn:"整理问答",say:"根据转写结果开始整理面试问答和复盘",
+           doneMsg:"转写完成，可以开始整理问答了。",doneHtml:()=>""},
   "_def":{doing:"处理中",done:"已完成",failed:"失败",btn:"",say:"",
           doneMsg:"任务已结束。",doneHtml:()=>""}
 };
@@ -1575,6 +1879,21 @@ function jobFailReason(snap){
   const clean=m.replace(/^[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Warning):\s*/,"");
   return clean || jobLastMessage(snap) || "详情见任务日志。";
 }
+// 凭据错是用户能自行修好的错误：把它做成一张有明确下一步的卡，而不是扔一串 API 原文。
+// 判据用后端约定的中文前缀，不能拿 qwen/401 等厂商细节做 UI 契约。
+function jobCredentialFailHtml(snap, reason){
+  if(!reason.startsWith("模型配置错误：")) return "";
+  const brief=reason.slice("模型配置错误：".length).replace(/请在.*$/,"").trim();
+  return `<div class="jfail">
+    <div class="jfail-head"><span class="jfail-icon">⚙</span><div>
+      <div class="jfail-title">识图模型需要更新密钥</div>
+      <div class="jfail-reason">${esc(brief||"模型认证未通过")}</div>
+    </div></div>
+    <div class="jfail-tip">打开右上角「⚙ 模型配置」，更新识图模型的 API Key，保存后重新发起识别。</div>
+    <div class="row"><button class="mini" onclick="toggleConfig(true)">打开模型配置</button></div>
+    <div class="hint">任务 ${esc((snap&&snap.id)||"")}</div>
+  </div>`;
+}
 function setJobEl(jobId, snap, done){
   const el=document.querySelector(`.prog[data-job="${jobId}"]`); if(!el) return;
   // ★ 大图开着的时候**先别重绘**：轮询每秒整体重绘 innerHTML，会把用户正看着的大图
@@ -1594,8 +1913,9 @@ function setJobEl(jobId, snap, done){
     // ★ 失败时**优先用任务自己的 message**（那里才是真正的死因），而不是最后一条进度
     //   文案 —— 建任务就被挡回来的活压根没有进度事件，照原样只会显示一句"详情见任务
     //   日志"，等于什么都没说。顺带把任务号带上，用户报问题时有据可查。
-    el.innerHTML=`<div class="row" style="margin:0"><b style="color:var(--err)">${w.failed}</b>
-      <span class="hint">${esc(jobFailReason(snap))}</span></div>
+    const reason=jobFailReason(snap), credentialHtml=jobCredentialFailHtml(snap,reason);
+    el.innerHTML=credentialHtml || `<div class="row" style="margin:0"><b style="color:var(--err)">${w.failed}</b>
+      <span class="hint">${esc(reason)}</span></div>
       <div class="hint">任务 ${esc((snap&&snap.id)||"")}</div>`;
   } else {
     // 跑着：上面是"当前这张"的缩略图+内容（就地换；视频任务没有 page 事件，是空的），
@@ -1612,6 +1932,7 @@ async function pollJob(jobId, tid){
   if(threadId!==tid){ delete _jobWatchers[jobId]; return; }
   try{
     const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
+    if(threadId!==tid){ delete _jobWatchers[jobId]; return; }
     if(jobGoing(snap)){
       setJobEl(jobId,snap,false);
       pollJob(jobId,tid);
@@ -1644,7 +1965,7 @@ async function watchThreadJob(sd, showEnded){
   if(!jobId||!tid||_jobShown[jobId]) return;
   try{
     const snap=await (await fetch(`/api/jobs/${jobId}`)).json();
-    if(!snap) return;
+    if(threadId!==tid || !snap) return;     // fetch 期间切会话，不许把面板塞进新对话
     const going=jobGoing(snap);
     // ★★ 收尾态也要把面板画出来，**但只在"刚刚发生"的那条路径上**（showEnded）：
     //    任务可能在两次轮询之间就跑完了 —— 建任务就被对端 503 挡回来时，整个任务只活
@@ -1712,7 +2033,7 @@ async function refreshProducts(){
   if(!me) return;
   try{
     const r=await fetch("/api/files"); if(!r.ok) return;
-    const d=await r.json(); renderProducts(d.groups||[]);
+    const d=await r.json(); renderProducts(d.groups||[]); renderDocumentProducts(d.documents||[],d.next_document_offset??null);
   }catch(e){ /* 抽屉打开失败静默，下次点开再试 */ }
 }
 function toggleProducts(show){
@@ -1723,7 +2044,7 @@ function toggleProducts(show){
 
 // ── 模型配置弹窗（顶栏 ⚙）─────────────────────────────────────────
 // 配置结构和服务端 station/modelcfg.py 一致，两份：providers[] 是"连接 + 模型名"，
-// slots{} 是四个槽位各自的**降级链**（有序的 provider id，第一位是主通道，后面是
+// slots{} 是各槽位自己的**降级链**（有序的 provider id，第一位是主通道，后面是
 // 兜底顺序）。改这个弹窗时，槽位清单要和服务端的 SLOT_LABELS 对上。
 // ★ GET 回来的 provider 里**没有明文 key**，只有 has_key / key_source；
 //   提交时 api_key 的三种写法含义不同（不带这个字段=不改 / ""=清空 / 非空=覆盖）。
@@ -1736,7 +2057,7 @@ let cfgKeys={};        // provider id → 用户刚敲的 key。★ 必须存着
 // 槽位 → provider 上存模型名的字段。加一行的同时**服务端要一起加**
 // （modelcfg 的 SLOT_LABELS / _ROLE_KEY），否则 ① 那行渲染不出来。
 const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model",
-                video:"video_model"};
+                speech:"speech_model",video:"video_model"};
 
 // 「推理强度」的可选值。★ 用下拉、不用自由输入框：这个值会**原样发给对端**，
 // 填个它不认的档位就是 400 → 4xx 不重试 → 降级链**静默换家**，用户只会觉得
@@ -1802,6 +2123,8 @@ function cfgTogglePw(pid, btn){
 // 某家 provider 在某个槽位用哪个模型名（和服务端 _model_for 同口径：
 // 判词没填就跟着文本模型走）。返回空串 = 这家不参与这个槽位。
 function cfgModelOf(p,slot){
+  if(p.route_protocol==="systemone" && slot!=="route") return "";
+  if(p.route_protocol==="systemone") return p.route_model||"";
   return (p[CFG_ROLE[slot]]||(slot==="route"?p.text_model:""))||"";
 }
 
@@ -1879,6 +2202,19 @@ function cfgEffortField(id, value){
     +'<em class="fh" title="'+esc(full)+'">推理模型调低可明显变快</em>';
 }
 
+function cfgRouteFields(id,p){
+  const protocol=p.route_protocol||"chat_completions";
+  const choices=[["chat_completions","普通模型"],["systemone","Jev 决策模型"]];
+  return '<label for="cfgp-'+id+'-protocol">意图识别接口</label>'
+    +'<select id="cfgp-'+id+'-protocol" onchange="cfgCollect();cfgRender()">'
+    +choices.map(o=>'<option value="'+o[0]+'"'+(o[0]===protocol?' selected':'')+'>'+o[1]+'</option>').join('')
+    +'</select><em class="fh">根据服务商接口选择</em>'
+    +'<label for="cfgp-'+id+'-threshold">意图识别阈值</label>'
+    +'<input id="cfgp-'+id+'-threshold" type="number" min="0" max="1" step="0.01" value="'
+    +esc(String(p.route_threshold??""))+'" placeholder="'+(protocol==="systemone"?'默认 0.8':'使用系统默认')+'">'
+    +'<em class="fh" title="范围 0 到 1，低于此值会尝试备用模型；越高越保守。Jev 的阈值需要用业务样本校准。">越高越保守，可留空</em>';
+}
+
 // 这一家的提示语：模板带来的就显示模板说明，自己加的给一句通用指引
 function cfgHintFor(p){
   const pre=(cfgData.presets||[]).find(x=>x.id===p.id);
@@ -1900,6 +2236,7 @@ function cfgKeyState(p){
 
 function cfgProvRow(p){
   const id=esc(p.id);
+  const decisionOnly=p.route_protocol==="systemone";
   const hint=cfgHintFor(p);
   // 密钥框的内容：用户这次敲过就用他敲的，否则用服务端回给本人的真值
   // （密码框会把它显示成 ****，点「显示」才明文）。
@@ -1917,20 +2254,22 @@ function cfgProvRow(p){
     +'<div class="cfgp-body">'
     +(hint?'<div class="cfgp-note">'+esc(hint)+'</div>':'')
     +'<div class="cfgp-grid">'
-    // 字段顺序**跟着上面 ① 的行序**（通用 → 意图识别 → 识图），用户才看得出
+    // 字段顺序**跟着上面 ① 的行序**（通用 → 意图识别 → 识图 → 语音识别），用户才看得出
     // "我在这儿填的这个名字，到底喂给 ① 的哪一行"。
     +cfgField(id,'label','名称',(p.label||""),"便于识别的名称，如「我的智谱」")
     +cfgField(id,'url','接口地址',(p.base_url||""),"服务商提供的 https:// 地址")
-    +cfgField(id,'text','通用模型',(p.text_model||""),"如 glm-5.3-flash","对话与文本生成")
+    +(decisionOnly?'':cfgField(id,'text','通用模型',(p.text_model||""),"如 glm-5.3-flash","对话与文本生成"))
     // 紧跟在「通用模型」下面 —— 它只作用于这一行（见 cfgEffortField 的注释）
-    +cfgEffortField(id,(p.reasoning_effort||""))
+    +(decisionOnly?'':cfgEffortField(id,(p.reasoning_effort||"")))
     // ★ 占位符不能举别家的模型名（比如在智谱的卡上写 "如 qwen-flash"）—— 用户会照着填错。
     //   拿不准就写"可留空"这种跟厂商无关的话。
-    +cfgField(id,'route','意图识别模型',(p.route_model||""),"可留空","留空则与「通用模型」一致")
-    +cfgField(id,'vision','识图模型',(p.vision_model||""),"需支持视觉输入","不处理图片时可留空")
+    +cfgField(id,'route','意图识别模型',(p.route_model||""),p.route_protocol==="systemone"?"填写 Jev 模型名":"可留空",p.route_protocol==="systemone"?"仅用于意图识别":"留空则与「通用模型」一致")
+    +cfgRouteFields(id,p)
+    +(decisionOnly?'':cfgField(id,'vision','识图模型',(p.vision_model||""),"需支持视觉输入","不处理图片时可留空"))
+    +(decisionOnly?'':cfgField(id,'speech','语音识别模型',(p.speech_model||""),"服务商要求时填写","音频转文字；没有可填 default"))
     // ★ 占位符不举别家模型名（老规矩，见上面 text 那行的注释）—— 内置的 Agnes 卡
     //   本来就把模型名预填好了，用户不需要照着一个例子去填。
-    +cfgField(id,'video','视频生成模型',(p.video_model||""),"可留空","按文字生成短视频；不做视频时可留空")
+    +(decisionOnly?'':cfgField(id,'video','视频生成模型',(p.video_model||""),"可留空","按文字生成短视频；不做视频时可留空"))
     +'<span class="cfgp-key"><label for="cfgp-'+id+'-key">密钥</label>'
     +'<input id="cfgp-'+id+'-key" type="password" autocomplete="new-password" value="'+esc(kVal)+'" placeholder="'+esc(cfgKeyPlaceholder(p))+'">'
     +'<button class="ghost mini" title="显示框中的明文，便于核对" onclick="cfgTogglePw(\''+id+'\',this)">显示</button>'
@@ -1944,11 +2283,14 @@ function cfgCollect(){
   (cfgData.config.providers||[]).forEach(p=>{
     const g=i=>document.getElementById("cfgp-"+p.id+"-"+i);
     const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),
-          vd=g("video"),k=g("key"),ef=g("effort");
+          sp=g("speech"),vd=g("video"),k=g("key"),ef=g("effort"),rp=g("protocol"),rt=g("threshold");
     if(l) p.label=l.value.trim();      if(u) p.base_url=u.value.trim();
     if(t) p.text_model=t.value.trim(); if(v) p.vision_model=v.value.trim();
-    if(r) p.route_model=r.value.trim(); if(vd) p.video_model=vd.value.trim();
+    if(r) p.route_model=r.value.trim(); if(sp) p.speech_model=sp.value.trim();
+    if(vd) p.video_model=vd.value.trim();
     if(ef) p.reasoning_effort=ef.value;   // ""=留空（服务端语义：一个字节都不发）
+    if(rp) p.route_protocol=rp.value;
+    if(rt) p.route_threshold=rt.validity.badInput ? "invalid" : (rt.value==="" ? null : Number(rt.value));
     if(k) cfgKeys[p.id]=k.value;       // ★ key 也一起收走，否则重绘就丢了
   });
 }
@@ -1960,7 +2302,8 @@ function cfgPayload(){
   return {providers:(c.providers||[]).map(p=>{
     const o={id:p.id,label:p.label,base_url:p.base_url,text_model:p.text_model,
              vision_model:p.vision_model,route_model:p.route_model,
-             video_model:p.video_model,key_env:p.key_env,
+             speech_model:p.speech_model,video_model:p.video_model,key_env:p.key_env,
+             route_protocol:p.route_protocol||"chat_completions",route_threshold:p.route_threshold??null,
              // ★ 必须**每次都带上**这一栏（含空串）。少了它：服务端的 _KEEP 会把字段
              //   滤掉，而 _normalize 对"键不存在"的家会回填内置默认 —— 于是用户
              //   **主动改成「留空」会被静默改回 low**，他下次打开发现又变回去了。
@@ -2011,7 +2354,8 @@ function cfgAddPreset(kind){
   }
   cfgData.config.providers.push({id:id,label:pre.label,base_url:pre.base_url,
     text_model:pre.text_model,vision_model:pre.vision_model,route_model:pre.route_model,
-    video_model:pre.video_model||"",
+    speech_model:pre.speech_model||"",video_model:pre.video_model||"",
+    route_protocol:pre.route_protocol||"chat_completions",route_threshold:pre.route_threshold??null,
     key_env:"",api_key:"",builtin:false,has_key:false,
     key_source:(pre.api_key?"db":"none")});
   if(pre.api_key) cfgKeys[id]=pre.api_key;       // 本地 Ollama：密钥预填好，它不校验
@@ -2036,7 +2380,7 @@ async function cfgSave(silent){
     return false;
   }
   cfgData=d; cfgKeys={}; cfgRender();   // 存完清空暂存：密钥框改回显示服务端回的真值
-  if(!silent) cfgSay('<span class="res ok">已保存 · 下次对话生效</span>');
+  cfgSay(silent?'':'<span class="res ok">已保存 · 下次对话生效</span>');
   return true;
 }
 
@@ -2288,7 +2632,7 @@ $("#mcpReset").onclick=()=>mcpReset();
 
 $("#btnNew").onclick=()=>newChat();
 $("#btnNewSide").onclick=()=>newChat();
-$("#btnSend").onclick=()=>{ const v=$("#inp").value.trim(); if(!v)return; $("#inp").value=""; send(v); };
+$("#btnSend").onclick=()=>sendWithDocuments();
 $("#inp").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#btnSend").click(); } });
 
 // 启动统一走 boot()（见文件顶部：/api/auth/me → 主对话 + 左侧历史），

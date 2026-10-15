@@ -13,27 +13,28 @@ import pytest
 
 from station import db, modelcfg
 
-# 四个槽位的固定顺序（跟 SLOT_LABELS 对齐，改这里要一起改）。
+# 五个槽位的固定顺序（跟 SLOT_LABELS 对齐，改这里要一起改）。
 # ★ 09-11 起没有 "text" 槽了：它和 "chat" 取的是同一个 text_model，合并成一个。
 # ★ 09-14 加了 "video"（视频生成模型）。**别嫌它新就不加进来** —— 不加的话，
 #   _slots() 造出来的配置里永远没有视频那一行，整套用例对它的校验就是空白。
-SLOTS = ("chat", "route", "vision", "video")
+SLOTS = ("chat", "route", "vision", "speech", "video")
 
 
 def _slots(*pids: str) -> dict:
-    """四个槽位都用同一条链（测试通常只关心其中某一个）。"""
+    """五个槽位都用同一条链（测试通常只关心其中某一个）。"""
     return {s: list(pids) for s in SLOTS}
 
 
 def _p(pid: str, **kw) -> dict:
     """造一个 provider 条目（默认字段齐全，便于被 _validate 放行）。
 
-    ★ 四个模型名字段都要给默认值：_slots() 会把这家塞进**每一个**槽位，少给一个
+    ★ 五个模型名字段都要给默认值：_slots() 会把这家塞进**每一个**槽位，少给一个
       就会有用例莫名多出"未填写「xx模型」"的问题（不是被测逻辑坏了，是夹具没跟上）。
     """
     p = {"id": pid, "label": pid, "base_url": "https://x.example/v1",
          "text_model": "t-" + pid, "vision_model": "v-" + pid,
-         "route_model": "", "video_model": "vm-" + pid, "key_env": ""}
+         "route_model": "", "speech_model": "s-" + pid,
+         "video_model": "vm-" + pid, "key_env": ""}
     p.update(kw)
     return p
 
@@ -65,14 +66,17 @@ def test_no_config_means_builtin_defaults(monkeypatch):
     assert [p["id"] for p in cfg["providers"]] == ["glm", "deepseek", "qwen", "agnes"]
     assert cfg["slots"]["chat"] == ["glm"]
     assert cfg["slots"]["vision"] == ["qwen"]
-    # 只认这四个槽位：老的 slots.text 不该在新配置里冒出来
-    assert set(cfg["slots"]) == {"chat", "route", "vision", "video"}
+    # 只认这五个槽位：老的 slots.text 不该在新配置里冒出来
+    assert set(cfg["slots"]) == {"chat", "route", "vision", "speech", "video"}
     # route 默认必须还是"用 qwen 家的 qwen-flash 模型"——与改造前 ROUTE_CHANNEL 完全一致
     assert cfg["slots"]["route"] == ["qwen"]
     assert [e["model"] for e in modelcfg.resolve("u1", "route")] == ["qwen-flash"]
     # ★ 视频那行零配置就该能用：链首 agnes、模型名是那个限时免费的档
     assert cfg["slots"]["video"] == ["agnes"]
     assert [e["model"] for e in modelcfg.resolve("u1", "video")] == ["agnes-video-2.5-flash"]
+    # ★ 语音识别没有内置服务商：默认空链，等用户配置自己的 ASR 来源。
+    assert cfg["slots"]["speech"] == []
+    assert modelcfg.resolve("u1", "speech") == []
     # ★ 只是"读"，不能合成一行落库：否则每个用户一登录库就长出一堆默认配置
     assert db.model_config_load("u1") is None
 
@@ -186,7 +190,7 @@ def test_guest_sees_no_key_in_ui_payload(monkeypatch, owner, guest):
 
 
 def test_legacy_text_slot_in_stored_config_is_dropped(owner):
-    """老库里存着 slots.text（09-11 之前配的）也不能炸，读出来只留现在这四个槽位。
+    """老库里存着 slots.text（09-11 之前配的）也不能炸，读出来只留现在的五个槽位。
 
     这是真机上一定会走到的迁移路径：用户改版前保存过配置，库里就有这个键。
     """
@@ -196,7 +200,7 @@ def test_legacy_text_slot_in_stored_config_is_dropped(owner):
         "slots": {"chat": ["glm"], "route": ["glm"],
                   "vision": ["glm"], "text": ["glm"]}})     # ← 直接写原始配置，绕过 save_config
     cfg = modelcfg.load_config(owner)
-    assert set(cfg["slots"]) == {"chat", "route", "vision", "video"}
+    assert set(cfg["slots"]) == {"chat", "route", "vision", "speech", "video"}
     assert cfg["slots"]["chat"] == ["glm"]
     # 老配置里的 key 不能被顺手丢掉
     assert modelcfg.load_config(owner)["providers"][0]["api_key"] == "sk-老的"
@@ -544,6 +548,70 @@ def test_provider_drift_guard_actually_bites(monkeypatch):
         "station 多一家不算漂移 —— 这里报红说明护栏又退回对称比较了"
 
 
+# ── ⑪ 语音识别模型（第五槽）：只接配置，不把它当聊天模型 ───────────────
+
+def test_speech_slot_supports_asr_only_provider():
+    """★ 一家服务商可以只有语音识别能力，不该被要求填通用/识图模型。"""
+    asr = {"id": "my-asr", "label": "我的语音识别", "base_url": "https://asr.example/v1",
+           "text_model": "", "vision_model": "", "route_model": "",
+           "speech_model": "whisper-large", "video_model": "",
+           "key_env": "", "api_key": "sk-asr"}
+    cfg = {"providers": [_p("glm"), asr],
+           "slots": {"chat": ["glm"], "route": ["glm"], "vision": ["glm"],
+                     "speech": ["my-asr"], "video": ["glm"]}}
+    modelcfg.save_config("u1", cfg)
+    entries = modelcfg.resolve("u1", "speech")
+    assert len(entries) == 1
+    assert entries[0]["id"] == "my-asr"
+    assert entries[0]["model"] == "whisper-large"
+    assert entries[0]["api_key"] == "sk-asr"
+
+
+def test_speech_slot_requires_a_speech_model():
+    cfg = modelcfg.default_config()
+    glm = next(p for p in cfg["providers"] if p["id"] == "glm")
+    glm["speech_model"] = ""
+    cfg["slots"]["speech"] = ["glm"]
+    with pytest.raises(ValueError) as e:
+        modelcfg.save_config("u1", cfg)
+    assert "语音识别模型" in str(e.value)
+
+
+def test_speech_slot_is_not_probed_as_chat():
+    """语音识别不是 /chat/completions，不能用聊天探针报假红灯。"""
+    asr = {"id": "my-asr", "label": "我的语音识别", "base_url": "https://asr.example/v1",
+           "text_model": "", "vision_model": "", "route_model": "",
+           "speech_model": "whisper-large", "video_model": "",
+           "key_env": "", "api_key": "sk-asr"}
+    modelcfg.save_config("u1", {
+        "providers": [_p("glm"), asr],
+        "slots": {"chat": ["glm"], "route": ["glm"], "vision": ["glm"],
+                  "speech": ["my-asr"], "video": ["glm"]},
+    })
+    _, _, model, slot, effort = modelcfg.probe_entry("u1", "my-asr")
+    assert model == "whisper-large" and slot == "speech"
+    assert effort == ""
+    assert "speech" in modelcfg.PROBE_NOT_CHAT
+
+
+def test_save_config_keeps_speech_model():
+    cfg = modelcfg.default_config()
+    glm = next(p for p in cfg["providers"] if p["id"] == "glm")
+    glm["speech_model"] = "speech-x"
+    modelcfg.save_config("u1", cfg)
+    got = next(p for p in modelcfg.load_config("u1")["providers"]
+               if p["id"] == "glm")
+    assert got["speech_model"] == "speech-x"
+
+
+def test_index_html_exposes_speech_slot_and_field():
+    src = (modelcfg.config.REPO / "src/station/app/static/index.html"
+           ).read_text(encoding="utf-8")
+    assert 'speech:"speech_model"' in src
+    assert "speech_model:p.speech_model" in src
+    assert "'语音识别模型'" in src
+
+
 # ── ⑨ 推理强度（09-20）：只挂通用模型、默认填好、脏值拦下 ──────────────
 # 加这一栏的起因：glm-5.3-flash 是推理模型，答「列 50 首歌」要 **50.5 秒**才写第一个
 # 正文字（思考走 reasoning_content，langchain 只认 content，宿主看到的就是"界面全白"）。
@@ -615,7 +683,8 @@ def test_bad_effort_value_is_rejected_at_save():
 
 
 @pytest.mark.parametrize("slot,expected",
-                         [("chat", "low"), ("vision", ""), ("route", ""), ("video", "")])
+                         [("chat", "low"), ("vision", ""), ("route", ""),
+                          ("speech", ""), ("video", "")])
 def test_effort_only_reaches_the_chat_slot(slot, expected):
     """★★ 只有「通用模型」那一条带这个参数，别的槽位一律空串。
 

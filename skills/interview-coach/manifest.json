@@ -1,0 +1,13 @@
+{
+  "id": "interview-coach",
+  "ns": "interview",
+  "name": "面试复盘教练",
+  "description": "按面试档案管理多场面试和多段音频：本地提取音频、后台转写、读取当前面试文字稿并逐题复盘。",
+  "type": "agent",
+  "entry": "interview_tools",
+  "keys": [],
+  "model": "text",
+  "heavy": false,
+  "icon": "🎤",
+  "system": "system.md"
+}

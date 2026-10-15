@@ -112,12 +112,14 @@ class JobManager:
         self._active: dict[str, Job] = {}   # 内存表：job_id → Job（≈ Map<String,Job>）
         self._lock = threading.Lock()       # 保护 _active 的锁（提交/移除并发时防竞态）
 
-    def submit(self, skill, args: dict, user_id: str = "") -> Job:
+    def submit(self, skill, args: dict, user_id: str = "", job_id: str = "") -> Job:
         """接一个任务：记进表、开 daemon 线程跑，立刻把 Job 还给调用方（不阻塞）。
 
         user_id：谁提的任务（登录用户；隔离历史列表用）。
         """
         job = Job(skill.id, args)
+        if job_id:
+            job.id = job_id                 # 宿主先持久化附件轮次引用，再启动 worker，避免抢跑
         job.user_id = user_id or ""
         job._persist()                          # 先落库，保证没跑就有档案
         with self._lock:
@@ -183,6 +185,24 @@ class JobManager:
         if job is None:
             job = Job.load(job_id)              # 磁盘兜底
         return job.snapshot() if job else None
+
+    def is_active(self, job_id: str) -> bool:
+        """任务是否仍有本进程 worker；重启后库里 running 的旧 job 不算活着。"""
+        with self._lock:
+            return job_id in self._active
+
+    def resume(self, job_id: str, skill) -> Job | None:
+        """只恢复明确可重跑的宿主任务；不自动重放视频生成等外部副作用。"""
+        with self._lock:
+            if job_id in self._active:
+                return self._active[job_id]
+            job = Job.load(job_id)
+            if job is None:
+                return None
+            job.update(status="queued", message="恢复附件处理")
+            self._active[job_id] = job
+        threading.Thread(target=self._run, args=(job, skill), daemon=True).start()
+        return job
 
     # stream()（SSE 推流）已删（09-11）：它的唯一调用方是 GET /api/jobs/{id}/events，
     # 而前端从头到尾都是**轮询** self.get(job_id)，没有任何 EventSource 连过那条流。

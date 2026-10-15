@@ -51,11 +51,17 @@ def t_artifacts(ctx, limit: int = 20) -> str:
     from station.files import store as fs
     mine = list(fs.iter_files(getattr(ctx, "user_id", "") or ""))
     mine.sort(key=lambda d: d.get("created", 0), reverse=True)      # 新的在前
+    # 文档产物有独立 owner/版本目录，不塞回会覆盖 owner 的全局哈希旁车。
+    from station import db
+    documents = [d for d in db.document_list(getattr(ctx, "user_id", "") or "") if d.get("latest_run")]
+    for document in documents:
+        mine.insert(0, {"id": document["id"], "name": "orignChunk / " + document["date"] + " / " + document["name"] + ".zip",
+                        "document_url": f"/api/documents/{document['id']}/archive"})
     if not mine:
         return "还没有产物。档案出件、周报导出之后会出现在这里。"
     n = max(1, min(int(limit or 20), 50))
     files = [{"name": d.get("name") or d["id"],
-              "url": f"/api/files/{d['id']}?dl=1"} for d in mine[:n]]
+              "url": d.get("document_url") or f"/api/files/{d['id']}?dl=1"} for d in mine[:n]]
     # ★ 把"我只能做到这一步"写进**返回值**，而不只是工具描述里 —— 返回值模型每轮都读得到，
     #   描述只是"事先的说明"。09-13 实测教训：模型会顺着"有 47 个产物"主动提出
     #   "要不要我按周报/4件套分类过滤一下"，而它根本没有这个能力 —— 这里把话说死，

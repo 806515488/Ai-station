@@ -7,10 +7,10 @@
   现在收敛到这一份：**内置表在这、用户的改动存 DB、解析成"可建连的条目"也在这**。
 
 两个核心概念（别混）：
-  - **provider（服务商）= 连接 + 模型名**：base_url、api_key、以及三个角色对应的
-    模型名（text_model / vision_model / route_model）。
+  - **provider（服务商）= 连接 + 模型名**：base_url、api_key、以及各能力对应的
+    模型名（text_model / vision_model / route_model / video_model / speech_model）。
   - **slot（槽位）= 用谁、按什么顺序**：一个有序的 provider id 列表，第一位是主通道，
-    后面是降级顺序。三个槽位见 SLOT_LABELS。
+    后面是降级顺序。当前槽位见 SLOT_LABELS。
 
 新手视角（Java 朋友版）：这个文件 ≈ 一份"数据源配置 + 解析器"，纯数据、不联网、
 不 import langchain。它只回答两件事：
@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import re
 
@@ -32,8 +33,9 @@ from station import config, db
 
 # 配置格式版本：将来结构大改时 +1。读到比这更大的版本不猜，回默认并给 warn。
 CURRENT_VERSION = 1
+ROUTE_PROTOCOLS = ("chat_completions", "systemone")
 
-# 四个槽位：id → 给人看的名字 + 一句人话说明（前端直接用）。
+# 槽位：id → 给人看的名字 + 一句人话说明（前端直接用）。
 # 名字刻意用大白话：这个弹窗是给不写代码的人用的，"路由判词""建档"这类内部叫法
 # 只有我们自己看得懂，别摆到界面上。
 #
@@ -45,8 +47,11 @@ SLOT_LABELS = {
     "chat":   "通用模型",
     "route":  "意图识别小模型",
     "vision": "识图模型",
-    # ★ 09-14 加的第四类。它和上面三个**不是同一类能力**：视频是"生成"，
-    #   上面三个是"理解/对话"。但挂法完全一样 —— 一家服务商在这个槽位有没有
+    # ★ 09-24 加的第五类。语音识别接收音频、输出文字；没有内置服务商，
+    #   用户自己配置的 provider 填了 speech_model 才会出现在这一行。
+    "speech": "语音识别模型",
+    # ★ 09-14 加的第四类。它和上面几个**不是同一类能力**：视频是"生成"，
+    #   上面几个是"理解/识别/对话"。挂法完全一样 —— 一家服务商在这个槽位有没有
     #   对应能力的模型名（video_model），决定它能不能被选进这一行。
     #   和当初加"识图模型"是同一个形状：agnes 就是"只有视频这一个能力"的家。
     "video":  "视频生成模型",
@@ -55,17 +60,20 @@ SLOT_HINTS = {
     "chat":   "用于日常对话与文本生成，建议选用能力最强的模型。",
     "route":  "判断请求应路由到哪个功能，建议选用响应快、成本低的模型。",
     "vision": "用于图片内容识别，必须支持视觉输入，纯文本模型不可用。",
+    "speech": "用于把音频转成文字，必须选择支持语音识别的模型或接口。",
     "video":  "用于按文字描述生成短视频，必须是视频生成模型，不是对话模型。",
 }
 
 # 每个槽位该取 provider 的哪个模型名角色。
 _ROLE_KEY = {"chat": "text_model", "route": "route_model",
-             "vision": "vision_model", "video": "video_model"}
+             "vision": "vision_model", "speech": "speech_model",
+             "video": "video_model"}
 
 # 「测试连接」对**这些槽位**没有意义：它们不是对话模型，打 /chat/completions 必然 400，
 # 而那**不是"连不上"、是探法不对** —— 把它显示成红叉会让用户去改一个本来正确的模型名。
 # 端点看到命中的是这类槽位就跳过试连，回一句中性提示。见 app/server.py 的测试端点。
 PROBE_NOT_CHAT = {
+    "speech": "语音识别模型不使用对话接口，当前「测试连接」先跳过；保存后由实际语音识别流程验证。",
     "video": "视频模型不走对话接口，没法用「测试连接」试。保存后直接生成一条试试。",
 }
 
@@ -100,24 +108,24 @@ BUILTIN_PROVIDERS = [
     {"id": "glm", "label": "智谱 GLM",
      "base_url": "https://open.bigmodel.cn/api/paas/v4",
      "text_model": "glm-5.3-flash", "vision_model": "glm-5.3-flash",
-     "route_model": "", "key_env": "GLM_API_KEY"},
+     "route_model": "", "speech_model": "", "key_env": "GLM_API_KEY"},
     {"id": "deepseek", "label": "DeepSeek",
      "base_url": "https://api.deepseek.com/v1",
      "text_model": "deepseek-flash", "vision_model": "deepseek-flash",
-     "route_model": "", "key_env": "DEEPSEEK_API_KEY"},
+     "route_model": "", "speech_model": "", "key_env": "DEEPSEEK_API_KEY"},
     {"id": "qwen", "label": "通义千问",
      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
      "text_model": "qwen-vl-max", "vision_model": "qwen-vl-max",
      # 判词走小模型：qwen 的现有能力里 qwen-flash 最便宜最快。
      # ★ 这个字段就是"干掉 qwen-flash 伪通道"的地方——以前它是一个独立的 provider
      #   条目，正是两份表漂移的源头；现在它只是 qwen 这个 provider 的一个角色模型名。
-     "route_model": "qwen-flash", "key_env": "QWEN_API_KEY"},
+     "route_model": "qwen-flash", "speech_model": "", "key_env": "QWEN_API_KEY"},
     # Agnes AI：目前只服务「视频生成模型」这一个槽位（见上面的说明）。
     # ★ 国内访问要用 https://apihub.agnes-ai.cn/v1，而 **密钥与节点是绑的** ——
     #   .cn 的 key 打 .com 会 401，反之亦然（官方文档明说）。这里给的是国际站。
     {"id": "agnes", "label": "Agnes AI",
      "base_url": "https://apihub.agnes-ai.com/v1",
-     "text_model": "", "vision_model": "", "route_model": "",
+     "text_model": "", "vision_model": "", "route_model": "", "speech_model": "",
      # 限时免费档；用户想换标准版/别家，直接在界面里改这一格即可。
      "video_model": "agnes-video-2.5-flash", "key_env": "AGNES_API_KEY"},
 ]
@@ -133,14 +141,23 @@ MAX_CHAIN = 6               # 单条降级链最长几跳（识别是每页一�
 # 为什么要模板：这个页面最劝退人的一步就是"接口地址"——普通人根本不知道该填什么。
 # 给现成的填好，他只负责粘密钥。
 EXTRA_PRESETS = [
+    {"id": "opencode-jev", "label": "OpenCode Zen · Jev",
+     "base_url": "https://opencode.ai/zen/v1",
+     "text_model": "", "vision_model": "", "route_model": "jev-1.13-free",
+     "speech_model": "", "video_model": "", "key_env": "", "api_key": "",
+     "route_protocol": "systemone", "route_threshold": 0.8,
+     "hint": "用于意图识别。填写 OpenCode Zen API Key，再加入上方意图识别顺序；"
+             "建议保留原模型作备用。免费模型为限时提供，不自动切换付费版本。"},
     {"id": "ollama", "label": "本地 Ollama（本机部署）",
      "base_url": "http://localhost:11434/v1",
      "text_model": "qwen2.5:14b", "vision_model": "", "route_model": "",
+     "speech_model": "",
      "key_env": "", "api_key": "ollama",
      "hint": "运行在本机的模型服务，接口地址固定为 11434 端口，密钥已预填（Ollama 不校验）。"
              "请将模型名改为本地实际已拉取的名称（可用 ollama list 查询）。"},
     {"id": "custom", "label": "其它（OpenAI 兼容接口）",
      "base_url": "", "text_model": "", "vision_model": "", "route_model": "",
+     "speech_model": "",
      "key_env": "", "api_key": "",
      "hint": "接入其它服务商或中转站：填写对方提供的接口地址与模型名，并填入密钥。"},
 ]
@@ -183,11 +200,14 @@ def _api_key(p: dict, allow_env: bool = True) -> str:
 
 def _model_for(p: dict, slot: str) -> str:
     """这家 provider 在某个槽位该用哪个模型名；不适合这个槽位返回 ''。"""
+    # System One 是决策接口；这一来源只允许参与意图识别。
+    if p.get("route_protocol") == "systemone" and slot != "route":
+        return ""
     role = _ROLE_KEY.get(slot)
     if role is None:
         return ""
     m = (p.get(role) or "").strip()
-    if not m and slot == "route":
+    if not m and slot == "route" and p.get("route_protocol") != "systemone":
         # route_model 留空 = 跟文本模型用同一个（内置三家除 qwen 外都是这样）
         m = (p.get("text_model") or "").strip()
     return m
@@ -217,10 +237,12 @@ def chain_label(entries: list) -> str:
 # ── 默认配置 / 规范化 ─────────────────────────────────────────────────
 
 def _default_slots(providers: list) -> dict:
-    """零配置时的四条链：**链首都读 env**，所以 .env 里的
-    TEXT_CHANNEL / VISION_CHANNEL / VIDEO_CHANNEL / STATION_*_CHANNEL / ROUTE_CHANNEL
-    依然生效。（"四条"在 09-11~09-14 之间其实只有三条 —— 那会儿 text 槽被合并进了
-    chat；09-14 补的 video 是真正的第四条。）
+    """零配置时的各槽位链：**链首都读 env**，所以 .env 里的
+    TEXT_CHANNEL / VISION_CHANNEL / VIDEO_CHANNEL / SPEECH_CHANNEL /
+    STATION_*_CHANNEL / ROUTE_CHANNEL 依然生效。
+
+    语音识别没有内置服务商，所以默认链为空；用户添加并配置自己的 ASR provider 后，
+    可以在界面里把它选进「语音识别模型」这一行。
 
     这就是"没配置 = 行为和以前一模一样"的保证：链首等于今天代码里写死的那个通道。
     """
@@ -232,10 +254,17 @@ def _default_slots(providers: list) -> dict:
         pid = _alias(pid)
         return pid if pid in ids else fallback
 
+    speech = _safe(config.channel_for("speech"), "")
+    speech_provider = next((p for p in providers if p.get("id") == speech), None)
+    if speech_provider is None or not _model_for(speech_provider, "speech"):
+        speech = ""
+
     return {
         "chat":   [_safe(config.channel_for("text"), "glm")],
         "route":  [_safe(_env("ROUTE_CHANNEL") or config.ROUTE_CHANNEL, "qwen")],
         "vision": [_safe(config.channel_for("vision"), "qwen")],
+        # 没有内置 ASR 家；默认空链，等用户配置自己的语音识别来源。
+        "speech": [speech] if speech else [],
         # 视频这一行的默认链首来自 DEFAULT_CHANNEL["video"]（= agnes），
         # 可以用 VIDEO_CHANNEL 环境变量覆盖。链首那家要是被用户删了就回落 agnes。
         "video":  [_safe(config.channel_for("video"), "agnes")],
@@ -426,6 +455,20 @@ def _validate(cfg: dict) -> list[str]:
             continue
         ids.add(pid)
         by_id[pid] = p
+        protocol = p.get("route_protocol", "chat_completions")
+        if protocol not in ROUTE_PROTOCOLS:
+            problems.append(f"{_name(p)} 的意图识别接口类型不支持")
+        if protocol == "systemone" and p.get("base_url"):
+            from station.core.systemone import endpoint
+            try:
+                endpoint(p["base_url"])
+            except (ValueError, TypeError, AttributeError):
+                problems.append(f"{_name(p)} 需填写接口根地址，例如 https://opencode.ai/zen/v1")
+        threshold = p.get("route_threshold")
+        if threshold not in (None, ""):
+            if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                    or not math.isfinite(threshold) or not 0 <= threshold <= 1):
+                problems.append(f"{_name(p)} 的意图识别阈值需为 0 到 1 的数字")
         if pid not in used:
             continue                        # 没用上的：允许是半成品，不挑内容
         # —— 内容检查：只挑"在用"的家 ——
@@ -490,8 +533,8 @@ def save_config(user_id: str, incoming: dict) -> dict:
     # ★ 加一个新的模型名字段时**必须**同步加进这个元组，否则它会被静默丢掉
     #   （用户填了、保存也不报错，就是下次打开发现空了）。
     _KEEP = ("id", "label", "base_url", "text_model", "vision_model",
-             "route_model", "video_model", "key_env", "api_key",
-             "reasoning_effort")
+             "route_model", "speech_model", "video_model", "key_env", "api_key",
+             "reasoning_effort", "route_protocol", "route_threshold")
     cfg["providers"] = [{k: p[k] for k in _KEEP if k in p}
                         for p in (cfg.get("providers") or []) if isinstance(p, dict)]
 
@@ -585,6 +628,8 @@ def _entry(p: dict, slot: str, allow_env: bool) -> dict | None:
             "allow_env": allow_env,          # 给 Model 选报错文案用
             "model": model,
             "slot": slot,
+            "route_protocol": p.get("route_protocol", "chat_completions"),
+            "route_threshold": p.get("route_threshold"),
             # 空串 = **一个字都不发**（不是"发个空的"）。见 REASONING_EFFORTS 的说明：
             # 不认这个参数的家收到它会 400，而 400 会让降级链静默换家。
             # ★★ 只对**通用模型（chat）**那一条生效，别的槽位一律空串、不发：
@@ -654,7 +699,7 @@ def probe_entry(user_id: str, provider_id: str,
     "这一家"测的，用户不该被要求先理解槽位。
 
     ★ 09-14 起**多回一个"命中的是哪个槽位"**：调用方靠它判断"这个模型能不能用对话
-      接口试连"（视频模型不能，见 PROBE_NOT_CHAT）。返回值从 3 元组变 4 元组，
+      接口试连"（语音/视频模型不能，见 PROBE_NOT_CHAT）。返回值从 3 元组变 4 元组，
       全仓只有 app/server.py 的测试端点一处解包（没有测试引用过它）。
     ★ 09-20 再**多回第 5 个「推理强度」**（空串 = 不发）：端点用它做两趟探测，
       把"参数被拒"和"连不上"分开报（见 app/server.py 的测试端点）。
@@ -665,7 +710,7 @@ def probe_entry(user_id: str, provider_id: str,
         raise ValueError("未找到该模型来源，请先保存配置")
     # video 排最后：内置那几家、以及用户自己加的家都是先命中 chat，行为一字不变；
     # 只有"除了视频模型名什么都没有"的家（agnes）才会落到 video。
-    order = ([slot] if slot else []) + ["chat", "vision", "route", "video"]
+    order = ([slot] if slot else []) + ["chat", "vision", "route", "speech", "video"]
     for s in order:
         m = _model_for(p, s)
         if m:

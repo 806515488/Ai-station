@@ -25,6 +25,7 @@ import re
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path                   # Path：路径对象（比字符串拼接路径更安全、可跨平台）
 
 # 保证 `python -m station.app.server` 时能 import（把仓库 src 放进 Python 的“找包路径”）。
@@ -90,7 +91,14 @@ def _make_model(skill, user_id: str = ""):
 
 
 # 创建 FastAPI 应用实例（“整个 web 服务的根对象”），好比 new 一个 SpringApplication
-app = FastAPI(title="station · 个人 AI 工作站")
+@asynccontextmanager
+async def _lifespan(_app):
+    from station.documents.service import recover
+    recover()
+    yield
+
+
+app = FastAPI(title="station · 个人 AI 工作站", lifespan=_lifespan)
 
 
 
@@ -143,11 +151,15 @@ def auth_me(request: Request):
 
 def _ctx(thread, agent) -> Context:
     """造本次运行的 Context：按命中的技能给独立数据目录（工具不是全局的）。"""
-    return Context(thread=thread, skill_id=agent.id,
+    context = Context(thread=thread, skill_id=agent.id,
                    data_dir=config.sub("skills", agent.id),
                    allowed_keys=list(getattr(agent, "keys", None) or []),
                    auto_approve=config.AUTO_APPROVE,
                    user_id=getattr(thread, "user_id", "") or "")
+    if any(m.get("attachment_turn_id") for m in thread.msgs):
+        from station.documents.inputs import collect
+        context.document_inputs = collect(thread)
+    return context
 
 
 def _skill_for_tool(tool_name: str):
@@ -213,13 +225,13 @@ def _tool_label(tool_name: str, user_id: str = "") -> str:
     return ""
 
 
-# ── 模型配置（每人一份：选哪家 provider、填 key、给四个槽位排降级链）─────────
+# ── 模型配置（每人一份：选哪家 provider、填 key、给各槽位排降级链）─────────
 # 为什么有这一组端点：以前"用哪家模型"写死在代码常量里、key 只能去 src/.env 改；
 # 现在用户可以在界面「模型配置」弹窗里自己配。整包配置的校验/掩码/解析全在
 # station/modelcfg.py —— 这里只做 HTTP 这层（取登录态 → 调它 → 转成响应）。
 
 class ModelConfigIn(BaseModel):
-    """PUT /api/modelconfig 的请求体：整包 provider 列表 + 四个槽位的降级链。"""
+    """PUT /api/modelconfig 的请求体：整包 provider 列表 + 各槽位的降级链。"""
     providers: list = []
     slots: dict = {}
 
@@ -344,6 +356,15 @@ def test_model_config(body: ProviderTestIn, request: Request):
             u["id"], body.provider_id, body.slot)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    decision_entry = None
+    if hit_slot == "route":
+        entries = modelcfg.resolve_one(u["id"], body.provider_id, "route")
+        if entries and entries[0].get("route_protocol") == "systemone":
+            decision_entry = entries[0]
+            # Validate the exact snapshot sent below, even if configuration changed
+            # concurrently after probe_entry(). Never resolve again after URL checks.
+            url, key, model = (decision_entry["base_url"], decision_entry["api_key"],
+                               decision_entry["model"])
     from urllib.parse import urlparse
     host = (urlparse(url).hostname or "").lower()
     if not url.lower().startswith(("http://", "https://")):
@@ -353,9 +374,9 @@ def test_model_config(body: ProviderTestIn, request: Request):
     if not key:
         return {"ok": False, "error": "NoKey", "ms": 0,
                 "hint": "尚未配置密钥，请填写后重试（本地 Ollama 可填任意非空值）"}
-    # ★ 命中"不是对话模型"的槽位（目前只有视频）→ **跳过试连**，回一句中性提示。
-    #   为什么不试：这条路的探法是拿 max_tokens=1 打 /chat/completions，而视频模型
-    #   根本不是对话模型，必然 400 —— 那**不是"连不上"，是探法不对**。显示成红叉会
+    # ★ 命中"不是对话模型"的槽位（语音识别、视频生成）→ **跳过试连**，回一句中性提示。
+    #   为什么不试：这条路的探法是拿 max_tokens=1 打 /chat/completions，而这类模型
+    #   不走对话接口，必然 400 —— 那**不是"连不上"，是探法不对**。显示成红叉会
     #   让用户去改一个本来正确的模型名（假红灯比不测更糟）。
     #   也别改成 GET /models 探活：无法确认对端实现了它，探不到又是一次假红灯。
     #   顺序放在"没填密钥"之后 —— "你还没填密钥"比"这里测不了"更该先说。
@@ -364,6 +385,17 @@ def test_model_config(body: ProviderTestIn, request: Request):
                 "hint": modelcfg.PROBE_NOT_CHAT[hit_slot]}
     t0 = time.perf_counter()
     try:
+        if decision_entry:
+            from station.core import systemone
+            try:
+                systemone.evaluate(decision_entry, "你好", {
+                    "greeting": "用户向你打招呼", "other": "其它请求"}, timeout=3.0)
+                return {"ok": True, "protocol": "systemone",
+                        "ms": int((time.perf_counter() - t0) * 1000)}
+            except Exception as exc:
+                return {"ok": False, "error": type(exc).__name__,
+                        "hint": systemone.error_hint(exc),
+                        "ms": int((time.perf_counter() - t0) * 1000)}
         # 走 import_chat_openai（与 core/model.py 共用一把锁、同一份缓存）：
         # 首次导入必须串行化，否则这里可能与对话/识别同时撞上"首次并发 import"竞态。
         # ★ 这个探针**刻意不套退避重试**：用户手点的"测试连接"应该立刻说真话，
@@ -570,7 +602,193 @@ async def upload_portrait(files: list[UploadFile] = File(...), request: Request 
     return {"files": fids, "count": len(fids)}
 
 
+# ── 面试音频上传（interview-coach 用；只收音频，不收原始视频）────────────
+MAX_INTERVIEW_AUDIO_BYTES = 300 * 1024 * 1024
+INTERVIEW_AUDIO_SUFFIXES = {
+    ".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm",
+}
+
+
+@app.post("/api/interview/audio")
+async def upload_interview_audio(file: UploadFile = File(...),
+                                 interview_id: str = Form(""),
+                                 request: Request = None):
+    """收一份面试音频，流式落文件区，返回文件 id。
+
+    只收音频、不收视频：视频应由用户在本地用 FFmpeg 提取成音频后再传，避免巨量文件
+    占用服务器带宽和内存。这里**不放 uploads/**，否则会被下一次档案照片上传的
+    `purge_old` 清掉。
+    """
+    u = require_user(request)
+    interview_id = (interview_id or "").strip()
+    if interview_id and db.interview_get(interview_id, u["id"]) is None:
+        raise HTTPException(400, "面试档案不存在或不属于当前账号，请重新打开上传卡片。")
+    raw = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    suffix = Path(raw).suffix.lower()
+    if suffix not in INTERVIEW_AUDIO_SUFFIXES:
+        raise HTTPException(
+            400, "请上传音频文件（m4a / mp3 / wav / aac / flac / ogg / opus / webm）。"
+                 "如果是面试视频，请先在本地用 FFmpeg 提取音频。")
+
+    from station.files import store as fs
+
+    tmp_dir = config.sub("interview_audio_tmp")
+    tmp = tmp_dir / (uuid.uuid4().hex + suffix)
+    total = 0
+    try:
+        with tmp.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_INTERVIEW_AUDIO_BYTES:
+                    raise HTTPException(
+                        413, f"音频太大了（超过 {MAX_INTERVIEW_AUDIO_BYTES // 1024 // 1024}MB）。"
+                             "建议用 FFmpeg 导出单声道 64kbps M4A 后再上传。")
+                out.write(chunk)
+        if not total:
+            raise HTTPException(400, "音频文件是空的")
+        name = raw or f"面试音频{suffix}"
+        fid = fs.save_path(
+            tmp, suffix, name=name,
+            owner=u["id"], skill_id="interview-coach",
+            group_key=f"interview-audio:{uuid.uuid4().hex[:8]}",
+            group_label=f"面试音频 · {time.strftime('%m-%d %H:%M')}",
+            extra={"purpose": "interview_audio"},
+        )
+        recording = (db.interview_recording_add(interview_id, u["id"], fid, name)
+                     if interview_id else None)
+        return {"file": fid, "name": name, "size": total,
+                "mime": file.content_type or "", "recording_id": (recording or {}).get("id", ""),
+                "interview_id": interview_id}
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:                         # noqa：临时文件清理失败不影响上传结果
+            pass
+
+
 # ── 会话（09-06 起按用户隔离）─────────────────────────────────────
+@app.post("/api/documents/upload")
+async def upload_documents(request: Request, files: list[UploadFile] = File(...),
+                           client_upload_id: str = Form(...)):
+    from station.documents import service, settings
+    user = require_user(request)
+    if len(files) > settings.limits()["max_files"] or len(client_upload_id) > 96:
+        raise HTTPException(400, "附件数量或上传编号超过限制")
+    accepted, errors = [], []
+    for index, file in enumerate(files):
+        try:
+            accepted.append(await service.upload(user["id"], file, f"{client_upload_id}:{index}"))
+        except ValueError as e:
+            errors.append({"name": file.filename, "message": str(e), "code": getattr(e, "code", "upload_failed")})
+        finally:
+            await file.close()
+    return {"documents": accepted, "errors": errors}
+
+
+@app.get("/api/documents/turns/{turn_id}")
+def document_turn(turn_id: str, request: Request):
+    from station.documents.service import turn_view
+    user = require_user(request)
+    turn = db.attachment_turn_get(turn_id, user["id"])
+    if not turn:
+        raise HTTPException(404, "附件轮次不存在")
+    thread = Thread.load(turn["thread_id"]) if turn["thread_id"] else None
+    return {**turn_view(turn), "job": get_manager().get(turn["job_id"]),
+            "blocked_by_approval": bool(thread and thread.pending)}
+
+
+@app.post("/api/documents/turns/{turn_id}/cancel")
+def cancel_document_turn(turn_id: str, request: Request):
+    user = require_user(request)
+    turn = db.attachment_turn_get(turn_id, user["id"])
+    if not turn:
+        raise HTTPException(404, "附件轮次不存在")
+    if not db.attachment_turn_update(turn_id, user["id"], {"state": "cancelled"}, expected=("waiting_parse",)):
+        raise HTTPException(409, "解析已完成或轮次已结束")
+    return {"ok": True}
+
+
+def _owned_document(document_id: str, request: Request) -> dict:
+    user = require_user(request)
+    document = db.document_get(document_id, user["id"])
+    if not document:
+        raise HTTPException(404, "文件不存在")
+    return document
+
+
+@app.get("/api/documents/{document_id}")
+def document_detail(document_id: str, request: Request):
+    from station.documents.service import view
+    return view(_owned_document(document_id, request), True)
+
+
+@app.delete("/api/documents/{document_id}")
+def delete_document_draft(document_id: str, request: Request):
+    from station.documents.service import delete_draft
+    if not delete_draft(_owned_document(document_id, request)):
+        raise HTTPException(409, "文件已经被使用，不能作为草稿删除")
+    return {"ok": True}
+
+
+@app.post("/api/documents/{document_id}/process")
+def process_document(document_id: str, request: Request):
+    from station.documents.service import reprocess, turn_view
+    document = _owned_document(document_id, request)
+    if document["status"] in {"parsing", "parsed_ready"}:
+        raise HTTPException(409, "此文件仍在处理中")
+    return turn_view(reprocess(document))
+
+
+@app.get("/api/documents/{document_id}/files/{resource_id}")
+def document_file(document_id: str, resource_id: str, request: Request, dl: int = 0, preview: int = 0):
+    from station.documents.service import resource_path
+    document = _owned_document(document_id, request)
+    try:
+        path, name = resource_path(document, resource_id)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, "文档资源不存在或未完成")
+    mime = {".json": "application/json", ".jsonl": "application/x-ndjson", ".txt": "text/plain"}.get(path.suffix)
+    if preview:
+        if mime is None:
+            raise HTTPException(400, "此资源仅支持下载")
+        with path.open(encoding="utf-8") as stream:
+            text = stream.read(64001)
+        return {"text": text[:64000], "truncated": len(text) > 64000}
+    return FileResponse(path, media_type=mime or "application/octet-stream",
+                        filename=name if dl or mime is None else None)
+
+
+@app.get("/api/documents/{document_id}/archive")
+def document_archive(document_id: str, request: Request, run_id: str = ""):
+    """流式写 ZIP 到文档数据卷，再下载；包内引用使用相对路径。"""
+    import zipfile
+    from station.documents import storage
+    document = _owned_document(document_id, request)
+    try:
+        folder, manifest = storage.manifest(document, run_id or None)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(409, "暂无可打包的结果")
+    manifest_name = document["runs"][manifest["run_id"]]["manifest"]
+    source = storage.root(document["owner_id"], document_id) / ("source" + document["suffix"])
+    if storage.sha256(source) != document["sha256"]:
+        raise HTTPException(409, "原件校验失败")
+    archive = folder / (manifest_name + ".zip")
+    temporary = archive.with_name(archive.name + "." + uuid.uuid4().hex + ".tmp")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.write(folder / manifest_name, "manifest.json")
+        for entry in manifest["resources"]:
+            path = (folder / entry["path"]).resolve()
+            if not path.is_relative_to(folder.resolve()) or storage.sha256(path) != entry["sha256"]:
+                raise HTTPException(409, "资源校验失败")
+            package.write(path, entry["path"])
+        package.write(source, "original/" + document["name"])
+    os.replace(temporary, archive)
+    return FileResponse(archive, media_type="application/zip", filename=Path(document["name"]).stem + ".zip")
+
+
 @app.get("/api/sessions")
 def sessions(request: Request, skill: str = ""):
     """列出当前登录用户的历史会话摘要（可选按技能过滤 ?skill=xxx）。"""
@@ -596,7 +814,9 @@ def session_detail(tid: str, request: Request):
     return {"id": t.id, "skill_id": t.skill_id, "msgs": view,
             "pending": pend,
             "job_id": meta.get("job_id") or "",
-            "cards": meta.get("cards") or []}
+            "cards": meta.get("cards") or [],
+            "attachment_turns": [{"id": row["id"], "state": row["state"], "thread_id": t.id}
+                                 for row in db.attachment_turn_list(u["id"], t.id)]}
 
 
 def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
@@ -607,7 +827,9 @@ def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
     合成 UI 顺序：assistant 工具调用 → “调用工具”行，卡片插在它所在工具结果之后。
     """
     items: list = []
-    cards = sorted(cards, key=lambda c: int(c.get("idx") or 0))
+    # 附件卡锚定用户消息，不受普通卡片只保留最近 30 张的限制，也不漂到回答后面。
+    cards = sorted([c for c in cards if (c.get("card") or {}).get("type") != "attachments"],
+                   key=lambda c: int(c.get("idx") or 0))
     ci = 0
     for pos, m in enumerate(msgs):
         role = m.get("role") or ""
@@ -627,6 +849,9 @@ def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
                     "args": [c.get("arguments") or {} for c in calls]}})
         elif role in ("user", "assistant") and content:
             items.append({"role": role, "content": content})
+            if role == "user" and m.get("attachment_turn_id"):
+                items.append({"role": "render", "content": "", "card": {
+                    "type": "attachments", "turn_id": m["attachment_turn_id"]}})
         # 卡片 idx 记的是“该工具结果出现的位置”，处理完这一条后再插入
         while ci < len(cards) and int(cards[ci].get("idx") or 0) <= pos:
             card = cards[ci].get("card")
@@ -650,6 +875,10 @@ class ChatIn(BaseModel):
     message: str                    # 用户说的话
     thread_id: str | None = None    # 续聊：带旧会话 id；None=新开一局
     skill: str | None = None        # 兼容旧客户端：统一入口下不再按它分技能
+    attachment_ids: list[str] = []
+    client_turn_id: str = ""
+    resume_turn_id: str = ""
+    retry_agent: bool = False
 
 
 def _sse(d: dict) -> str:
@@ -680,6 +909,7 @@ async def chat(body: ChatIn, request: Request):
     """
     # gen() 是嵌套【生成器】：调用 chat() 只返回一个 StreamingResponse，
     # 只有当框架真正去读这个流时，gen() 里的代码才会逐行执行到每个 yield。
+    agent_execution_id = uuid.uuid4().hex
     def gen():
         t_start = time.perf_counter()          # 分段计时用（见末尾的 timing 日志）
         user = None
@@ -688,6 +918,19 @@ async def chat(body: ChatIn, request: Request):
         except HTTPException as e:
             yield _sse({"type": "error", "text": e.detail})
             return
+        # 恢复请求只引用已冻结的轮次，不接受前端补交的原文或目录。
+        attachment_turn = None
+        if body.attachment_ids and not body.thread_id and body.client_turn_id:
+            previous = db.attachment_turn_find(body.client_turn_id, user["id"])
+            if previous:
+                body.thread_id = previous["thread_id"]
+        if body.resume_turn_id:
+            attachment_turn = db.attachment_turn_get(body.resume_turn_id, user["id"])
+            if not attachment_turn or not attachment_turn["thread_id"] or (body.thread_id and body.thread_id != attachment_turn["thread_id"]):
+                yield _sse({"type": "error", "text": "附件轮次不存在"})
+                return
+            body.thread_id = attachment_turn["thread_id"]
+            body.message = attachment_turn["message"]
         # ① 只读“技能目录”（id/name/desc），此时不把任何技能的工具给模型。
         catalog = build_skill_catalog()
         available = {c.id for c in catalog}
@@ -704,7 +947,41 @@ async def chat(body: ChatIn, request: Request):
             thread.user_id = user["id"]
         else:
             thread.skill_id = "station"            # 旧模块会话也并入统一主对话
-        thread.add_user(body.message)              # 把用户这句话写进历史
+        if body.attachment_ids and not attachment_turn:
+            from station.documents import service as documents
+            if thread.pending:
+                yield _sse({"type": "error", "text": "请先完成上一操作的批准，再发送附件"})
+                return
+            try:
+                turn, created = documents.submit(thread, body.message or "请阅读附件，说明内容和处理情况",
+                                                 body.attachment_ids, body.client_turn_id)
+            except ValueError as e:
+                yield _sse({"type": "error", "text": str(e)})
+                return
+            card = {"type": "attachments", "turn_id": turn["id"], "thread_id": thread.id}
+            if created:
+                _remember_card(thread, card)
+                thread.save()
+            yield _sse({"type": "meta", "thread_id": thread.id})
+            yield _sse({"type": "render", "card": card})
+            yield _sse({"type": "attachment_wait", "turn_id": turn["id"], "thread_id": thread.id})
+            yield _sse({"type": "done"})
+            return
+        if attachment_turn:
+            if thread.pending:
+                yield _sse({"type": "error", "text": "请先完成上一操作的批准"})
+                return
+            allowed = ("ready", "failed", "interrupted") if body.retry_agent else ("ready",)
+            from station.documents.pipeline import BOOT_ID
+            claimed = db.attachment_turn_update(attachment_turn["id"], user["id"],
+                                                {"state": "running_agent", "error": "", "agent_boot_id": BOOT_ID,
+                                                 "agent_claim_id": agent_execution_id}, expected=allowed)
+            if not claimed:
+                yield _sse({"type": "meta", "thread_id": thread.id})
+                yield _sse({"type": "done"})
+                return
+        else:
+            thread.add_user(body.message)              # 把用户这句话写进历史
         yield _sse({"type": "meta", "thread_id": thread.id})   # 先告诉前端“这是哪个会话”
 
         agent = None                               # 本次真正执行的 agent（命中后才定）
@@ -766,7 +1043,7 @@ async def chat(body: ChatIn, request: Request):
         #   完全没命中但有活跃技能 → 续用活跃技能（同一会话里的“继续”）。
         if agent is None:
             sid = route.skill_id if route else ""
-            active = (thread.meta or {}).get("active_skill", "")
+            active = attachment_turn.get("active_skill", "") if attachment_turn else (thread.meta or {}).get("active_skill", "")
             # ★★ 线程已经在某个技能里做事时，**不许被一条无上下文的判定抢走** ——
             #    除非消息里真的出现了目标技能的词根（见 router.may_switch_to）。
             #    这条防的是：一条视频线程里用户说"我重新上传照片"，被档案的词表抢走，
@@ -806,6 +1083,9 @@ async def chat(body: ChatIn, request: Request):
                        "route_ms": route_ms, "first_delta_ms": None,
                        "total_ms": round((time.perf_counter() - t_start) * 1000, 1),
                        "error": f"{type(e).__name__}: {e}"[:200]})
+            if attachment_turn:
+                db.attachment_turn_update(attachment_turn["id"], user["id"],
+                                          {"state": "failed", "error": "模型不可用，附件解析结果已保留"})
             yield _sse({"type": "error", "text": f"模型不可用：{e}"})
             return
         thread.save()                              # active_skill 先落盘
@@ -814,6 +1094,9 @@ async def chat(body: ChatIn, request: Request):
         yield _sse({"type": "stage", "text": "正在思考…"})
         first_delta_ms = None                      # 从收到请求到**吐出第一个字**的耗时
         for ev in run_agent(ctx, thread, agent, model):
+            if attachment_turn and ev.type == "error":
+                db.attachment_turn_update(attachment_turn["id"], user["id"],
+                                          {"state": "failed", "error": "对话执行失败，附件解析结果已保留"})
             if ev.type == "delta" and first_delta_ms is None:
                 first_delta_ms = round((time.perf_counter() - t_start) * 1000, 1)
             if ev.type == "render":
@@ -824,6 +1107,9 @@ async def chat(body: ChatIn, request: Request):
                 # 而这段时间历史根本没变（答复是在本轮末尾才 add 的），所以跳过。
                 thread.save()
             yield ev.to_sse()                      # 把每个 Event 转成 SSE 推给前端
+        if attachment_turn:
+            db.attachment_turn_update(attachment_turn["id"], user["id"], {"state": "done"},
+                                      expected=("running_agent",))
         # 分段耗时落日志：光记 route_ms 分不清"路由慢"还是"模型慢"——
         # 用户报"等十几秒才吐字"时，这三个数一眼就能定位（见 docs/conventions.md）。
         log_route({"kind": "chat", "text": body.message[:60],
@@ -832,7 +1118,29 @@ async def chat(body: ChatIn, request: Request):
                    "total_ms": round((time.perf_counter() - t_start) * 1000, 1)})
 
     # StreamingResponse(生成器) 是 FastAPI 的“边生产边发送”响应体
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    def guarded_gen():
+        try:
+            yield from gen()
+        except Exception as e:
+            if body.resume_turn_id:
+                user = current_user(request)
+                current = db.attachment_turn_get(body.resume_turn_id, user["id"]) if user else None
+                if current and current.get("agent_claim_id") == agent_execution_id:
+                    db.attachment_turn_update(body.resume_turn_id, user["id"],
+                                              {"state": "failed", "error": "对话执行失败，已完成解析产物保留"},
+                                              expected=("running_agent",))
+            log_route({"kind": "chat_error", "error_type": type(e).__name__})
+            yield _sse({"type": "error", "text": "请求处理失败，请重新载入会话查看附件状态"})
+        finally:
+            # 断网/浏览器取消不能留下永远 running 的轮次；外部工具不自动重放。
+            if body.resume_turn_id:
+                user = current_user(request)
+                current = db.attachment_turn_get(body.resume_turn_id, user["id"]) if user else None
+                if current and current.get("agent_claim_id") == agent_execution_id:
+                    db.attachment_turn_update(body.resume_turn_id, user["id"],
+                                              {"state": "interrupted", "error": "对话连接中断，请明确重试"},
+                                              expected=("running_agent",))
+    return StreamingResponse(guarded_gen(), media_type="text/event-stream")
 
 
 # ── pipeline 型：异步任务 ──────────────────────────────────────
@@ -1015,12 +1323,18 @@ def _group_products(files: list) -> list:
 
 
 @app.get("/api/files")
-def list_files(request: Request):
+def list_files(request: Request, document_offset: int = 0):
     """当前登录用户的产物组（我的产物抽屉数据源）。"""
     u = require_user(request)
     from station.files import store as fs       # 函数内 import，保持 server 顶层轻量
     mine = [f for f in fs.iter_files(u["id"])]  # owner 已由 store 过滤（历史文件兼容可见）
-    return {"groups": _group_products(mine)}
+    from station.documents.service import view
+    if document_offset < 0 or document_offset > 1000000:
+        raise HTTPException(400, "文档分页位置无效")
+    documents = db.document_list(u["id"], 101, document_offset)
+    return {"groups": _group_products(mine),
+            "documents": [view(d) for d in documents[:100] if d.get("runs")],
+            "next_document_offset": document_offset + 100 if len(documents) > 100 else None}
 
 
 @app.get("/api/files/{fid}")

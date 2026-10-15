@@ -16,6 +16,11 @@ from station.core.session import Thread
 from station.jobs.manager import Job
 
 
+# db.py 里**允许不自己拿 `_lock`** 的私有助手：它们的 docstring 写明"仅在调用者已持
+# _lock 时使用"，在任何调用点外层都已经拿了锁。加一条之前先确认真是这种形状。
+_LOCK_FREE_HELPERS = {"_refresh_interview_status"}
+
+
 def test_user_register_and_login():
     """注册成功/重名拒绝；登录对给用户错给 None。"""
     u = db.create_user("alice", "pw1")
@@ -93,9 +98,17 @@ def test_every_db_accessor_holds_the_lock():
         body = ast.get_source_segment(src, node)
         if "conn(" in body and "with _lock" not in body:
             offenders.append(f"{node.name}(db.py:{node.lineno})")
+    # ★ 例外：**私有助手**，docstring 已写明"仅在调用者已持 _lock 时使用"，
+    #   所以自己不再拿一次锁（拿两次就是重入，且读的是同一个连接）。
+    #   登记在这里是例外表、不是豁免清单 —— 哪天它被改成能独立调用，请改为自己拿锁。
+    offenders = [o for o in offenders if o.split("(")[0] not in _LOCK_FREE_HELPERS]
     assert not offenders, (
         "这些函数摸了 sqlite 连接却没拿 _lock —— 多线程下会读到错乱的行、"
         "表现为数据凭空消失：" + "、".join(offenders))
+    # 自毁式护栏：例外表里的函数一旦被改名/删除，这里会红并让你清掉废条目
+    defined = {n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)}
+    stale = _LOCK_FREE_HELPERS - defined
+    assert not stale, ("例外表里的函数在 db.py 里已不存在，请删掉对应条目：" + "、".join(sorted(stale)))
 
     # ★ 第二半：db.py **之外**任何地方都不许直接碰连接。
     #   只查 db.py 内部是不够的 —— 曾经 server.py 的 _owned_project 里有一句

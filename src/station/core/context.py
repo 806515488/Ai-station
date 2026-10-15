@@ -32,6 +32,7 @@ class Context:
     job_id: str = ""                        # 后台任务号（job 场景由 manager 带上，落现场/审计用）
     system: str = ""                        # 技能系统提示词（server 从 system.md 读来挂上）
     events: list = field(default_factory=list)   # 事件收集桶（也可由 agent 生成器直接 yield）
+    document_inputs: dict[str, str] = field(default_factory=dict)  # 附件轮次 -> 已发布 parsed 资料
 
     def key(self, name: str) -> str:
         """只在白名单内取 key；越权返回 ''，不把 secret 泄露给技能。

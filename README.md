@@ -18,7 +18,7 @@
 
 ## 为什么做这个
 
-每个人的需求清单都会一直长：写周报、整理档案、生视频、一个 coding 小助手……
+每个人的需求清单都会一直长：写周报、整理档案、面试复盘、生视频、一个 coding 小助手……
 
 **每个需求都做一个独立 App 是死路** —— 对话、工具调用、任务进度、文件产物、权限确认，这些东西每个 App 都要重写一遍。
 
@@ -40,7 +40,7 @@ station 的做法是把它们抽成**宿主基建**，需求侧只写一个**技
 - **工具命名空间作用域** —— 工具全名是 `<ns>.<tool>`。路由命中某个技能后，**只有该技能的工具对模型可见**，其他技能的工具根本不出现在 tool schema 里。技能多了也不会互相污染、不会白烧 token。
 - **in-band 批准闸** —— 危险工具（写文件、对外动作）被调用时**跨回合挂起**：agent 停下来向用户请求批准，用户下一条消息才决定执行还是拒绝。不是弹窗，是对话流里的一张卡片。
 - **渲染即工具** —— 工具返回 `{text, render}`：`text` 进模型的上下文，`render` 变成对话流里的卡片（表格 / 图 / 文件 / 待办…）。**UI 不是预先铺好的页面，而是 agent 的输出通道。**
-- **模型只经一层适配** —— 换模型、接本地 Ollama，只动 `src/station/core/model.py`。
+- **模型适配** —— 通用聊天走 `src/station/core/model.py`；意图识别支持普通聊天接口及 Jev System One 专用决策接口。
 - **MCP 客户端** —— 接外部 MCP server 的工具。MCP 工具直接进工具的常驻面，和内置全局工具并排。
   - **安全边界**：用户能配的只有 `http` / `sse`（填个地址），**配不了 `stdio`** —— 那等于让服务器起任意进程，而这是个公网可达的站。内置服务才允许 stdio，且命令写死在代码里。
 
@@ -67,6 +67,8 @@ skills/<id>/
 ### 运行时
 
 - **三层路由漏斗** —— L1 关键词秒判 → L2 小模型（带墙钟预算，超时降级）→ L3 通用 agent 兜底。只有命中的技能才加载工具面。
+- **可选 Jev 意图识别** —— 在模型配置中添加 OpenCode Zen · Jev，填 Key 后加入意图识别顺序。使用 `jev-1.13-free` 和专用 `/systemone` 接口，保留原模型作备用；免费模型限时提供，不自动切换付费版本。
+- **通用文档附件** —— LangChain Loader → Unstructured 基础清洗 → 完整解析与独立切块；支持 TXT/MD、CSV/TSV、文字 PDF、DOCX、基础 XLSX/HTML。结果按 `orignChunk / 日期 / 文档 / 版本` 保存，可预览和下载；首版不包含 OCR、复杂表格重建或向量库写入。
 - **异步任务** —— `queued → running → done | failed`，进度事件落盘、前端轮询、产物进文件区。崩了重启能找回。
 - **重活闸** —— 全站同一时刻只跑 N 件吃内存的任务（默认 1）。把 OOM 从「服务无告警消失」变成可控排队，且排队原因对用户可见。
 - **产物区 + 预览** —— 生成的文件按产出分组，对话里可点开、可下载。
@@ -124,6 +126,13 @@ STATION_FAKE=1 station-web
 PYTHONPATH=src python -m station.app.server
 ```
 
+启用文档附件需在联网准备阶段安装组件并准备本地资源，之后解析、清洗和切块可离线运行：
+
+```bash
+pip install -e ".[documents]"
+python scripts/prepare_document_resources.py
+```
+
 ---
 
 ## 📖 使用
@@ -142,6 +151,13 @@ PYTHONPATH=src python -m station.app.server
     → 逐个核对
 你：出件
     → 批准卡片确认 → 4 件套以文件卡片出现在对话里，可下载
+
+你：我想做一次面试复盘，视频应该怎么处理？
+    → 给出 FFmpeg 官方下载入口和本地提取音频命令
+你：上传面试音频
+    → 上传本地提取出的音频，后台调用语音识别，返回带说话人和时间戳的转写
+你：这是我整理好的问答/文字稿
+    → 逐题讨论，先听你的判断，再结合原回答给出改进建议
 ```
 
 ---
@@ -185,12 +201,12 @@ def tools() -> list[Tool]:
 
 ## ⚙️ 配置
 
-配置优先级：**环境变量 > `src/.env` > 界面「⚙ 模型配置」（存库、按用户分）**。
+模型来源及备用顺序在界面「⚙ 模型配置」按用户保存。密钥优先使用本人保存的值；未填时仅站长可回落到环境变量／`src/.env`。环境变量优先于 `.env`。
 
 | 变量 | 说明 |
 |---|---|
 | `GLM_API_KEY` / `QWEN_API_KEY` / `DEEPSEEK_API_KEY` | 三家 OpenAI 兼容端点的密钥，任配其一即可 |
-| `TEXT_CHANNEL` / `VISION_CHANNEL` | 文本槽 / 视觉槽默认走哪家 |
+| `TEXT_CHANNEL` / `VISION_CHANNEL` / `VIDEO_CHANNEL` / `SPEECH_CHANNEL` | 通用 / 识图 / 视频 / 语音识别槽默认走哪家；语音识别没有内置服务商，需先添加自己的兼容来源 |
 | `STATION_FAKE` | `1` = 用离线假模型冒烟，不烧 key |
 | `STATION_AUTO_APPROVE` | `1` = 危险工具免确认（**仅本机调试**） |
 | `STATION_MAX_STEPS` | agent 一轮最多走多少工具步 |
@@ -210,6 +226,7 @@ src/station/          宿主
 ├── tools/            全局工具（每个会话都注入）
 ├── mcp/              MCP 客户端（外部工具接入，含一个内置的网页搜索 server）
 ├── files/            产物区
+├── documents/        附件解析、清洗、质量检查、切块及持久化
 └── app/              FastAPI + static/index.html（单文件前端）
 
 src/archive/          第一个技能的业务实现
@@ -232,7 +249,9 @@ pytest -q -k 批准               # 按关键字挑
 pytest tests/test_deploy.py -q  # 单个文件
 ```
 
-测试夹具会把数据目录与 SQLite 都指到临时目录，所以**可以随便跑**，不会污染你的真实数据。
+测试夹具会把数据目录与数据库（SQLite）都指到临时目录，所以**可以随便跑**，不会污染你的真实数据。
+真 PostgreSQL 那条路另有集成测试（`tests/test_postgres_integration.py`，默认跳过，给了
+`STATION_TEST_DATABASE_URL` 才跑）。
 
 ---
 
@@ -247,9 +266,14 @@ docker compose up -d --build
 要点（都是踩过的坑，写在文件注释里）：
 
 - 容器里必须绑 `0.0.0.0`（绑 `127.0.0.1` 则容器外连不进来，且**不报错**）
-- `data/` 是唯一持久状态（SQLite + 用户文件 + 产物），**必须挂卷** —— 不挂的话容器一删数据全没，而且是静默的
+- `data/` 装着用户文件与产物，**必须挂卷** —— 不挂的话容器一删数据全没，而且是静默的
+- 数据库：**生产用 PostgreSQL**（compose 里的 `postgres` 服务，数据卷 `pgdata`，**同样必须挂卷**），
+  应用靠 `STATION_DATABASE_URL` 连它；**留空则回落 SQLite**（本机开发与离线测试走的就是这条路，
+  库文件在 `data/station/station.db`）。老的 SQLite 数据用 `station-migrate-postgres` 一次性导入
 - `mem_limit` 给一个 cgroup 硬上限：超了死的是容器、一眼看得出；没有它内核会在宿主机上**随机挑受害者**
 - `.dockerignore` 把 `data/`、`samples/` 挡在镜像外（镜像层删不干净，数据绝不能烤进去）
+- 附件 NLTK 资源需要预先准备到宿主机 `/srv/station/nltk`，由 Compose 只读挂到 `/opt/station-nltk`。可运行 `python scripts/prepare_document_resources.py --output-dir /srv/station/nltk`；离线服务器需从同平台准备环境复制资源。
+- 既有 PostgreSQL 缺表时，先停掉所有应用实例，再执行 `docker compose run --rm --no-deps station station-upgrade-postgres`，最后起站；应用启动不会隐式升级已有库。仅新增 Jev 配置不需要升级数据库。
 
 ---
 
