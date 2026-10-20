@@ -320,19 +320,25 @@ def iter_transcribe(base_url: str, key: str, model: str, audio_url: str, *,
                     diarization_enabled: bool = True,
                     channel_id: int = 0,
                     poll_interval: float = 5.0,
-                    poll_deadline: float = 7200.0):
+                    poll_deadline: float = 7200.0,
+                    existing_task_id: str = "", checkpoint=None):
     """生成器版完整转写：逐条产 progress，最后产一条 result。
 
     build_runner 直接消费这个生成器，把每次 yield 落成 job 进度；普通调用方用
     `transcribe()` 包一层拿最终结果。
     """
-    yield {"type": "progress", "percent": 2, "message": "正在提交语音识别任务"}
-    task_id = submit_task(
-        base_url, key, model, audio_url,
-        language_hints=language_hints,
-        diarization_enabled=diarization_enabled,
-        channel_id=channel_id,
-    )
+    task_id=existing_task_id
+    if not task_id:
+        if checkpoint:checkpoint(phase="submitting")
+        yield {"type": "progress", "percent": 2, "message": "正在提交语音识别任务"}
+        task_id = submit_task(
+            base_url, key, model, audio_url,
+            language_hints=language_hints,
+            diarization_enabled=diarization_enabled,
+            channel_id=channel_id,
+        )
+        if checkpoint:checkpoint(phase="remote_wait",remote_id=task_id,remote_state="submitted")
+
     yield {"type": "progress", "percent": 8,
            "message": f"任务已提交（{task_id}）", "task_id": task_id}
 
@@ -345,6 +351,7 @@ def iter_transcribe(base_url: str, key: str, model: str, audio_url: str, *,
         if status in SUCCESS_STATES:
             break
         if status in FAILED_STATES:
+            if checkpoint:checkpoint(remote_state="failed",remote_terminal=True)
             raise DashScopeAsrError(f"语音识别失败：{task_error(data)}")
         elapsed = time.monotonic() - started
         if elapsed >= poll_deadline:
@@ -361,6 +368,7 @@ def iter_transcribe(base_url: str, key: str, model: str, audio_url: str, *,
             f"任务完成但没有返回 transcription_url；响应字段：{sorted(_output(data))}")
     yield {"type": "progress", "percent": 94,
            "message": "正在下载转写结果", "task_id": task_id}
+    if checkpoint:checkpoint(phase="download",remote_state="completed")
     raw = download_result(url)
     out = normalize_result(raw, model=model, task_id=task_id)
     yield {"type": "progress", "percent": 100,

@@ -232,10 +232,16 @@ def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
     skill = get_registry().get(ctx.skill_id or "interview-coach")
     if skill is None or skill.build_runner is None:
         return "语音识别执行器没有装载，重启工作站再试。"
-    job = get_manager().submit(skill, {
-        "file_id": fid, "interview_id": interview["id"], "recording_id": recording["id"],
-    }, user_id=_owner(ctx))
-    db.interview_recording_start(recording["id"], _owner(ctx), job.id)
+    import uuid
+    job_id=uuid.uuid4().hex[:16]
+    db.interview_recording_start(recording["id"], _owner(ctx), job_id)
+    try:
+        job = get_manager().submit(skill, {
+            "file_id": fid, "interview_id": interview["id"], "recording_id": recording["id"],
+        }, user_id=_owner(ctx),job_id=job_id)
+    except Exception as exc:
+        db.interview_recording_finish(recording["id"],_owner(ctx),error_message=type(exc).__name__,expected_job_id=job_id)
+        raise
     _remember_job(ctx, job.id)
     return {
         "text": (f"开始转写（任务 {job.id}）。音频会生成临时访问链接交给百炼，"
@@ -509,15 +515,16 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
     fid = (file_id or "").strip()
     if not fid:
         raise ValueError("没有音频文件")
-    if not fs.path(fid):
+    if not fs.path(fid) and not (getattr(ctx,'task_recovery',{}) or {}).get('remote_id'):
         raise ValueError("音频文件不存在")
     owner = _owner(ctx)
     recording = db.interview_recording_get(recording_id, owner)
     if recording is None or recording.get("interview_id") != interview_id or recording.get("file_id") != fid:
         raise ValueError("音频与面试档案归属不一致")
-    token = share.make_ref_link(fid, owner, ttl=max(share.link_ttl(), 14400.0))
+    recovery=getattr(ctx,"task_recovery",{}) or {}
+    token = None if recovery.get("remote_id") else share.make_ref_link(fid, owner, ttl=max(share.link_ttl(), 14400.0))
     try:
-        url = share.ref_url(token)
+        url = share.ref_url(token) if token else ""
         import asr
         result = None
         for ev in asr.iter_transcribe(
@@ -553,7 +560,7 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
                                       expected_job_id=ctx.job_id or "")
         raise
     finally:
-        share.revoke([token])
+        if token:share.revoke([token])
 
 
 def tools() -> list[Tool]:
@@ -637,7 +644,7 @@ def tools() -> list[Tool]:
             args=[{"name": "file_id", "type": "str",
                    "desc": "音频上传接口返回的文件 id", "required": False}],
         ),
-        Tool(name="retry_transcribe", label="重试转写", risk="approve",
+        Tool(name="retry_transcribe", label="重新转写（新任务）", risk="approve",
              description="用户明确要求时，为失败或陈旧的转写任务创建新 job；旧 job 无权覆盖新结果。",
              run=retry_transcribe,
              args=[{"name":"recording_id","type":"str","desc":"录音 id（可省，默认当前面试最近一段）","required":False}]),

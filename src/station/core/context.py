@@ -35,6 +35,17 @@ class Context:
     document_inputs: dict[str, str] = field(default_factory=dict)  # 附件轮次 -> 已发布 parsed 资料
     web_budget: Any = None                  # 本轮网页请求次数、网络等待及正文预算；不持久化
 
+    task_checkpoint: Any = None
+    task_cancel: Any = None
+    task_recovery: dict = field(default_factory=dict)
+    reply_only: bool = False
+
+    def checkpoint(self, **values):
+        if self.task_checkpoint:self.task_checkpoint(**values)
+
+    def check_cancel(self):
+        if self.task_cancel:self.task_cancel()
+
     def key(self, name: str) -> str:
         """只在白名单内取 key；越权返回 ''，不把 secret 泄露给技能。
 

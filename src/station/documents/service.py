@@ -119,7 +119,7 @@ def mark_ready(turn_id: str, owner: str) -> None:
 def turn_view(turn: dict) -> dict:
     """返回前端需要的状态，不公开真实目录或整份后台配置。"""
     return {"id": turn["id"], "thread_id": turn["thread_id"], "job_id": turn["job_id"],
-            "state": turn["state"], "error": turn.get("error", ""),
+            "state": turn["state"], "error": turn.get("error", ""), "manual_reply":bool(turn.get("manual_reply")),
             "documents": [view(db.document_get(x, turn["owner_id"]), False)
                           for x in turn["attachment_ids"]], "failures": turn.get("failures", {})}
 
@@ -180,11 +180,13 @@ def recover() -> None:
     from station.jobs.manager import get_manager
     manager = get_manager()
     for turn in db.attachment_turn_list():
-        if turn["state"] == "running_agent" and turn.get("agent_boot_id") != BOOT_ID:
+        from station.observability.recorder import instance_id
+        if (turn["state"] == "running_agent" and turn.get("agent_boot_id") != BOOT_ID
+                and turn.get("agent_instance_id") == instance_id()):
             db.attachment_turn_update(turn["id"], turn["owner_id"],
                                       {"state": "interrupted", "error": "对话执行中断，请明确重试"})
         job = manager.get(turn["job_id"])
-        if job and job["status"] in {"queued", "running"} and not manager.is_active(turn["job_id"]):
+        if job and job["status"] in {"queued", "running", "interrupted"} and not manager.is_active(turn["job_id"]):
             if turn.get("worker_boot_id") != BOOT_ID and turn["state"] != "cancelled":
                 manager.resume(turn["job_id"], Executor())
     for document in db.document_expired_drafts(time.time() - 7 * 86400):

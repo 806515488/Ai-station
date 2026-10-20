@@ -568,6 +568,12 @@ def build_runner(ctx, prompt: str = "", seconds: str = "5",
     if not text:
         raise ValueError("没有画面描述，无法生成")
 
+    from station.tasks import runtime as task_runtime
+    recovery=getattr(ctx,"task_recovery",{}) or {}
+    if recovery.get("remote_id"):
+        entry=task_runtime.resolve_remote(_owner(ctx),recovery,"video")
+        yield from _collect(ctx,entry,recovery["remote_id"],text,sec,ar)
+        return
     entries = modelcfg.resolve(_owner(ctx), "video")
     if not entries:
         raise ValueError("还没有配置「视频生成模型」（右上角 ⚙ 模型配置）")
@@ -605,11 +611,17 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
     entry, last_err = None, None
     for e in entries:
         try:
+            from station.tasks.runtime import entry_snapshot
+            getattr(ctx,"checkpoint",lambda **kw:None)(phase="submitting",**entry_snapshot(e))
+            getattr(ctx,"check_cancel",lambda:None)()
             task = agnes.create_task(e["base_url"], e["api_key"], e["model"],
                                      text, sec, ar, images=images or None)
             entry = e
             break
-        except Exception as ex:              # noqa：这家不行 → 试下一家
+        except Exception as ex:
+            # 提交结果不明确时不换家创建第二条任务；只有明确拒绝才可尝试备用来源。
+            if not isinstance(ex,agnes.AgnesError) or ex.status not in (400,401,403,404,429,503):
+                raise
             last_err = ex
     if entry is None:
         raise ValueError(f"创建视频任务失败：{last_err}")
@@ -617,6 +629,8 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
     vid = str(task.get("video_id") or task.get("id") or "").strip()
     if not vid:
         raise ValueError("Agnes 没返回任务编号（video_id），无法跟踪进度")
+    from station.tasks.runtime import entry_snapshot
+    getattr(ctx,"checkpoint",lambda **kw:None)(phase="remote_wait",remote_id=vid,remote_state="submitted",**entry_snapshot(entry))
     # ★ 第一条事件必须是 progress：宿主收到它，界面上的进度条立刻从 0 动起来，
     #   用户知道"点了有反应"。真正的等待在这之后（几分钟），先把这一步做实。
     #   （archive 的识别链也是这么做的，同样的理由。）
@@ -625,6 +639,19 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
     # 任务编号只留痕、不改进度条 —— 出问题时排查要用它去对端的控制台查
     yield {"type": "log", "text": f"agnes video_id={vid} model={entry['model']}"}
 
+    yield from _collect(ctx,entry,vid,text,sec,ar)
+
+
+def _collect(ctx,entry,vid,text,sec,ar):
+    """恢复仅查询原远端任务并下载，绝不重新调用 create_task。"""
+    import agnes
+    from station.files import store as fs
+    if (getattr(ctx,"task_recovery",{}) or {}).get("remote_id")==vid:
+        for saved in fs.iter_files(owner=_owner(ctx)):
+            if saved.get("owner")==_owner(ctx) and saved.get("group_key")==f"video:{vid}" and fs.path(saved['id']):
+                yield {"type":"artifact","id":saved['id']}
+                yield {"type":"progress","percent":100,"message":"已取回本地保存的视频"}
+                return
     # ② 轮询到出结果。★ 只认"完成/失败"两个终态，**其余一律当还在跑** ——
     #    漏认一个状态名（比如对端哪天改叫 succeeded）会表现为"跑到最后超时"，
     #    那比多等一轮难查得多。
@@ -650,6 +677,7 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
             break
         if s in ("failed", "error", "cancelled"):
             # 对端把原因放在 error 字段里（实测有这个键，正常时是 null）
+            getattr(ctx,"checkpoint",lambda **kw:None)(remote_state="failed",remote_terminal=True)
             raise ValueError(
                 f"生成失败：{status.get('error') or status.get('message') or '对端未说明原因'}")
         if time.time() > deadline:
@@ -669,6 +697,7 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
         #   把实际的键列出来，下次一眼就能看出该改成读哪个。
         raise ValueError("任务完成了，但响应里没有视频地址（顶层 url 与 metadata.url 都是空）。"
                          f"响应里的字段有：{sorted(status)}")
+    getattr(ctx,"checkpoint",lambda **kw:None)(phase="download",remote_state="completed")
     yield {"type": "progress", "percent": 96, "message": "正在下载视频…"}
     data = agnes.download(url)
 
@@ -678,6 +707,7 @@ def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
         owner=_owner(ctx), skill_id=ctx.skill_id or "video",
         group_key=f"video:{vid}",
         group_label=f"AI 视频 · {text[:18]}")
+    getattr(ctx,"checkpoint",lambda **kw:None)(phase="completed",remote_state="completed")
     yield {"type": "artifact", "id": fid}
     yield {"type": "progress", "percent": 100, "message": "完成"}
 

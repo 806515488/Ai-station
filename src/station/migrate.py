@@ -33,6 +33,8 @@ _TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("station_attachment_turns", ("id", "user_id", "thread_id", "client_key", "state", "record", "created", "updated")),
     ("station_traces", ("id", "user_id", "thread_id", "correlation_key", "created", "updated", "record")),
     ("station_trace_spans", ("id", "trace_id", "created", "record")),
+    ("station_task_control", ("job_id", "user_id", "instance_id", "boot_id", "token", "lease_until", "cancel_requested", "record", "updated")),
+    ("station_task_actions", ("id", "user_id", "job_id", "action", "client_key", "next_job_id", "created")),
 )
 
 

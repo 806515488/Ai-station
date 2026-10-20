@@ -76,7 +76,7 @@ def cache_for(document: dict, cfg: dict) -> dict | None:
     return None
 
 
-def run_one(document: dict, cfg: dict, turn: dict):
+def run_one(document: dict, cfg: dict, turn: dict, cancel_check=None):
     """启动一个解析进程，短事件经队列交给父进程；日志不承载原文。"""
     import psutil
     run_id = uuid.uuid4().hex
@@ -122,6 +122,7 @@ def run_one(document: dict, cfg: dict, turn: dict):
         completed, parsed_ready, failure = False, False, None
         try:
             while process.poll() is None or reader.is_alive() or not messages.empty():
+                if cancel_check:cancel_check()
                 current_turn = db.attachment_turn_get(turn["id"], turn["owner_id"])
                 if current_turn["state"] == "cancelled":
                     raise ValueError("附件处理已取消")
@@ -172,7 +173,7 @@ def build_runner(ctx, turn_id: str):
             raise ValueError("附件处理已取消")
         document = db.document_get(document_id, ctx.user_id)
         try:
-            for event in run_one(document, turn["config"], turn):
+            for event in run_one(document, turn["config"], turn, cancel_check=getattr(ctx,"task_cancel",None)):
                 if event.get("type") == "progress":
                     yield {"type": "progress", "percent": int((index - 1) / len(turn["attachment_ids"]) * 100),
                            "message": f"{document['name']} · {event['message']}"}

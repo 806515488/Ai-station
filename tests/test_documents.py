@@ -63,7 +63,7 @@ def finish(client, turn_id):
         response = client.get("/api/documents/turns/" + turn_id)
         assert response.status_code == 200
         value = response.json()
-        if value["job"]["status"] in {"done", "failed"}:
+        if value["job"]["status"] in {"done", "failed", "cancelled"}:
             return value
         time.sleep(0.1)
     raise AssertionError("附件任务超时")
@@ -340,6 +340,11 @@ def test_restart_recovers_persisted_parse_job(client, monkeypatch):
     def persist_only(executor, args, user_id, job_id=""):
         job = Job(executor.id, args); job.id = job_id; job.user_id = user_id
         job._persist()
+        # 模拟新版本在 worker 启动前退出：留下本实例的过期执行工牌。
+        # 没有工牌的旧任务可能属于另一实例，不再自动抢占。
+        db.task_control_create(job.id,user_id,{})
+        from station.observability.recorder import instance_id
+        db.task_claim(job.id,user_id,instance_id(),'previous-boot','previous-token',-1)
         return job
     with monkeypatch.context() as patch:
         patch.setattr(manager, "submit", persist_only)
@@ -350,8 +355,9 @@ def test_restart_recovers_persisted_parse_job(client, monkeypatch):
     assert done["state"] == "ready" and not done["failures"]
     messages = client.get("/api/sessions/" + turn["thread_id"]).json()["msgs"]
     assert sum(m["role"] == "user" for m in messages) == 1
+    from station.observability.recorder import instance_id
     db.attachment_turn_update(turn["turn_id"], owner,
-                              {"state": "running_agent", "agent_boot_id": "previous-process"})
+                              {"state": "running_agent", "agent_boot_id": "previous-process", "agent_instance_id":instance_id()})
     service.recover()
     assert db.attachment_turn_get(turn["turn_id"], owner)["state"] == "interrupted"
 

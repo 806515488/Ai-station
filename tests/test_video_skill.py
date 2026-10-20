@@ -537,7 +537,7 @@ def test_build_runner_backs_off_on_rate_limit(fake_agnes, monkeypatch):
 
 
 def test_build_runner_tries_next_provider_only_on_create(fake_agnes, monkeypatch):
-    """★ 建任务失败才换下一家；建成功之后就不再换（半途换家 = 两家各烧一次额度）。"""
+    """★ 建任务明确被拒绝才换下一家；建成功之后就不再换（半途换家 = 两家各烧一次额度）。"""
     from station import modelcfg
 
     monkeypatch.setattr(modelcfg, "resolve", lambda uid, slot: [
@@ -552,7 +552,7 @@ def test_build_runner_tries_next_provider_only_on_create(fake_agnes, monkeypatch
                 images=None, timeout=30):
         tried.append(base_url)
         if "bad" in base_url:
-            raise agnes.AgnesError("坏了", status=500)
+            raise agnes.AgnesError("坏了", status=401)
         return {"video_id": "v-ok"}
 
     monkeypatch.setattr(agnes, "create_task", _create)

@@ -759,6 +759,7 @@ def cancel_document_turn(turn_id: str, request: Request):
         raise HTTPException(404, "附件轮次不存在")
     if not db.attachment_turn_update(turn_id, user["id"], {"state": "cancelled"}, expected=("waiting_parse",)):
         raise HTTPException(409, "解析已完成或轮次已结束")
+    db.task_cancel(turn['job_id'],user['id'])
     return {"ok": True}
 
 
@@ -949,6 +950,7 @@ class ChatIn(BaseModel):
     client_turn_id: str = ""
     resume_turn_id: str = ""
     retry_agent: bool = False
+    reply_only: bool = False
 
 
 def _sse(d: dict) -> str:
@@ -1074,9 +1076,11 @@ async def chat(body: ChatIn, request: Request):
                 return
             allowed = ("ready", "failed", "interrupted") if body.retry_agent else ("ready",)
             from station.documents.pipeline import BOOT_ID
+            from station.observability.recorder import instance_id
             claimed = db.attachment_turn_update(attachment_turn["id"], user["id"],
                                                 {"state": "running_agent", "error": "", "agent_boot_id": BOOT_ID,
-                                                 "agent_claim_id": agent_execution_id}, expected=allowed)
+                                                 "agent_claim_id": agent_execution_id,"agent_instance_id":instance_id(),
+                                                 "reply_only":bool(body.reply_only or attachment_turn.get("reply_only"))}, expected=allowed)
             if not claimed:
                 trace_state["state"] = "skipped"
                 if trace_state["request_step"]:
@@ -1084,11 +1088,13 @@ async def chat(body: ChatIn, request: Request):
                 yield _sse({"type": "meta", "thread_id": thread.id})
                 yield _sse({"type": "done"})
                 return
+            if not any(m.get("attachment_turn_id")==attachment_turn["id"] for m in thread.msgs):
+                thread.add({"role":"user","content":attachment_turn["message"],"attachment_turn_id":attachment_turn["id"]})
         else:
             thread.add_user(body.message)              # 把用户这句话写进历史
         yield _sse({"type": "meta", "thread_id": thread.id})   # 先告诉前端“这是哪个会话”
 
-        agent = None                               # 本次真正执行的 agent（命中后才定）
+        agent = generic if attachment_turn and (body.reply_only or attachment_turn.get("reply_only")) and not thread.pending else None
         ctx = None
 
         # ③ 意图入口第一段（L1 规则）：上一轮危险工具挂起(pending)，
@@ -1169,6 +1175,9 @@ async def chat(body: ChatIn, request: Request):
         if ctx is None:
             ctx = _ctx(thread, agent)
             ctx.system = (agent.system or "").strip()
+        ctx.reply_only = bool(attachment_turn and (body.reply_only or attachment_turn.get("reply_only")))
+        if ctx.reply_only:
+            ctx.system += "\n本次仅根据已保存的附件与处理结果继续回答，不执行或重放任何工具。资料不足时明确说明。"
 
         # 记住/清除本会话的活跃技能（后续“继续/再改一下”能在同一技能里走）
         if agent.id in available:
@@ -1294,6 +1303,36 @@ async def chat(body: ChatIn, request: Request):
 # ── pipeline 型：异步任务 ──────────────────────────────────────
 # 起任务的入口只在**技能工具内部**（如 archive.recognize 调 manager.submit），
 # 不走 HTTP —— 对话式改造后前端不再直接提交任务，POST /api/jobs 已删（09-11）。
+
+
+class TaskActionIn(BaseModel):
+    action: str
+    client_key: str
+
+
+@app.get("/api/tasks")
+def list_tasks(request: Request, cursor: str = "", category: str = "all"):
+    from station.tasks.service import listing
+    u=require_user(request)
+    try:return listing(u["id"],cursor,category)
+    except ValueError as exc:raise HTTPException(400,str(exc))
+
+
+@app.get("/api/tasks/{job_id}")
+def task_detail(job_id: str, request: Request):
+    from station.tasks.service import owned,view
+    u=require_user(request)
+    try:return view(owned(job_id,u["id"]),u["id"])
+    except LookupError:raise HTTPException(404,"任务不存在")
+
+
+@app.post("/api/tasks/{job_id}/actions")
+def task_action(job_id: str, body: TaskActionIn, request: Request):
+    from station.tasks.service import perform
+    u=require_user(request)
+    try:return perform(u["id"],job_id,body.action,body.client_key)
+    except LookupError:raise HTTPException(404,"任务不存在")
+    except ValueError as exc:raise HTTPException(409,str(exc))
 
 
 @app.get("/api/jobs/{job_id}")

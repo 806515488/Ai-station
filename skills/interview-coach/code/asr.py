@@ -92,7 +92,8 @@ def iter_transcribe_entry(entry: dict, audio_url: str, *,
                           diarization_enabled: bool = True,
                           channel_id: int = 0,
                           poll_interval: float = 5.0,
-                          poll_deadline: float = 7200.0):
+                          poll_deadline: float = 7200.0,
+                          existing_task_id: str = "", checkpoint=None):
     """生成器版：按协议产出 progress，最后产出 result。"""
     model = str(entry.get("model") or "").strip()
     lower = model.lower()
@@ -109,6 +110,7 @@ def iter_transcribe_entry(entry: dict, audio_url: str, *,
             channel_id=channel_id,
             poll_interval=poll_interval,
             poll_deadline=poll_deadline,
+            **({"existing_task_id":existing_task_id,"checkpoint":checkpoint} if existing_task_id or checkpoint else {}),
         )
         return
 
@@ -145,11 +147,17 @@ def iter_transcribe(ctx, audio_url: str, *,
                     poll_interval: float = 5.0,
                     poll_deadline: float = 7200.0):
     """从当前用户配置解析模型，并按协议产出可转发给 job 的事件。"""
+    from station.tasks.runtime import entry_snapshot,resolve_remote
+    recovery=getattr(ctx,"task_recovery",{}) or {}
+    entry=resolve_remote(_owner(ctx),recovery,"speech") if recovery.get("remote_id") else resolve_entry(ctx)
+    callback=getattr(ctx,"task_checkpoint",None)
+    if callback:callback(**entry_snapshot(entry))
     yield from iter_transcribe_entry(
-        resolve_entry(ctx), audio_url,
+        entry, audio_url,
         language_hints=language_hints,
         diarization_enabled=diarization_enabled,
         channel_id=channel_id,
         poll_interval=poll_interval,
         poll_deadline=poll_deadline,
+        **({"existing_task_id":recovery.get("remote_id", ""),"checkpoint":callback} if callback or recovery.get("remote_id") else {}),
     )

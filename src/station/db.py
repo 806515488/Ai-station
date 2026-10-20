@@ -284,6 +284,22 @@ def _trace_schema() -> tuple[str, ...]:
     )
 
 
+def _task_schema() -> tuple[str, ...]:
+    return (
+        "CREATE TABLE IF NOT EXISTS station_task_control("
+        "job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, user_id TEXT NOT NULL, "
+        "instance_id TEXT NOT NULL DEFAULT '', boot_id TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '', "
+        "lease_until DOUBLE PRECISION NOT NULL DEFAULT 0, cancel_requested INTEGER NOT NULL DEFAULT 0, "
+        "record TEXT NOT NULL DEFAULT '{}', updated DOUBLE PRECISION NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS station_task_actions("
+        "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, job_id TEXT NOT NULL, action TEXT NOT NULL, "
+        "client_key TEXT NOT NULL, next_job_id TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, "
+        "UNIQUE(user_id,client_key))",
+        "CREATE INDEX IF NOT EXISTS idx_task_control_user ON station_task_control(user_id,updated)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_created ON jobs(user_id,created DESC,id DESC)",
+    )
+
+
 def _postgres_schema() -> tuple[str, ...]:
     """PostgreSQL 的初始 DDL（新库首次启动自动建表，幂等）。
 
@@ -330,7 +346,7 @@ def _postgres_schema() -> tuple[str, ...]:
         "CREATE INDEX IF NOT EXISTS idx_ck_project ON checkpoints(project, id)",
         "CREATE INDEX IF NOT EXISTS idx_ref_expires ON ref_links(expires)",
     )
-    return core + _interview_schema() + _document_schema() + _trace_schema()
+    return core + _interview_schema() + _document_schema() + _trace_schema() + _task_schema()
 
 
 _PG_SCHEMA_LOCK = 741_267_945
@@ -340,7 +356,8 @@ _PG_INTERVIEW_TABLES = {"interviews", "interview_recordings", "interview_questio
                         "interview_question_spans", "interview_reviews", "interview_actions"}
 _PG_DOCUMENT_TABLES = {"station_documents", "station_attachment_turns"}
 _PG_TRACE_TABLES = {"station_traces", "station_trace_spans"}
-_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES
+_PG_TASK_TABLES = {"station_task_control", "station_task_actions"}
+_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
 
 
 def _postgres_schema_state(c: _PostgresConnection) -> str:
@@ -352,7 +369,7 @@ def _postgres_schema_state(c: _PostgresConnection) -> str:
         "'model_configs','mcp_servers','ref_links','interviews','interview_recordings',"
         "'interview_questions','interview_question_spans','interview_reviews',"
         "'interview_actions','station_documents','station_attachment_turns',"
-        "'station_traces','station_trace_spans')").fetchall()
+        "'station_traces','station_trace_spans','station_task_control','station_task_actions')").fetchall()
     tables = {row["table_name"] for row in rows}
     if not tables:
         return "empty"
@@ -363,7 +380,7 @@ def _postgres_schema_state(c: _PostgresConnection) -> str:
         "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name='users' AND column_name='seq') "
         "AS present").fetchone()["present"]
-    required = _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES
+    required = _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
     return "current" if has_seq and required.issubset(tables) else "upgrade-needed"
 
 
@@ -395,7 +412,7 @@ def upgrade_postgres_schema(c: _PostgresConnection) -> str:
                 "UPDATE users SET seq=ordered.seq FROM ("
                 "SELECT id, ROW_NUMBER() OVER (ORDER BY created ASC, id ASC) AS seq FROM users"
                 ") AS ordered WHERE users.id=ordered.id AND users.seq=0")
-        for statement in _interview_schema() + _document_schema() + _trace_schema():
+        for statement in _interview_schema() + _document_schema() + _trace_schema() + _task_schema():
             c.execute(statement)
         return "upgraded"
 
@@ -592,7 +609,7 @@ def init_db(c: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_reviews_question_version ON interview_reviews(question_id, version DESC);
     CREATE INDEX IF NOT EXISTS idx_actions_interview_status_updated ON interview_actions(interview_id, status, updated DESC);
     """)
-    for statement in _document_schema() + _trace_schema():
+    for statement in _document_schema() + _trace_schema() + _task_schema():
         c.execute(statement)
     _migrate(c)
     c.commit()
@@ -1025,6 +1042,21 @@ def thread_list(user_id: str, skill_id: str | None = None) -> list[dict]:
 def job_save(j) -> None:
     """把 jobs/manager.Job 写进 jobs 表（每次 update/append 都会调，UPSERT）。"""
     with _lock:
+        token=getattr(j,'_lease_token','')
+        if token:
+            # 围栏必须与写入是同一条 SQL：心跳检查后网络暂停时，旧 token 仍不能覆盖新 worker。
+            result=conn().execute(
+                "UPDATE jobs SET status=?,progress=?,message=?,log=?,artifacts=?,result=?,updated=? "
+                "WHERE id=? AND user_id=? AND EXISTS(SELECT 1 FROM station_task_control c "
+                "WHERE c.job_id=jobs.id AND c.user_id=jobs.user_id AND c.token=? AND c.lease_until>?)",
+                (j.status,j.progress,j.message,json.dumps(j.log,ensure_ascii=False),json.dumps(j.artifacts),
+                 json.dumps(j.result,ensure_ascii=False) if j.result is not None else None,j.updated,
+                 j.id,j.user_id,token,_now()))
+            conn().commit()
+            if not result.rowcount:
+                from station.tasks.runtime import LeaseLost
+                raise LeaseLost()
+            return
         conn().execute(
             "INSERT INTO jobs(id,user_id,skill_id,args,status,progress,message,"
             "log,artifacts,result,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
@@ -1041,22 +1073,164 @@ def job_save(j) -> None:
         conn().commit()
 
 
-def job_load(job_id: str):
-    """按 id 读回 manager.Job 对象；没有返回 None。"""
+def _job_from_row(row):
+    """纯行适配，不访问连接；job_load 和任务分页共用。"""
     from station.jobs.manager import Job
+    j = Job(row["skill_id"], json.loads(row["args"]))
+    j.id = row["id"]
+    j.status, j.progress = row["status"], row["progress"]
+    j.message, j.created, j.updated = row["message"], row["created"], row["updated"]
+    j.log = json.loads(row["log"])
+    j.artifacts = json.loads(row["artifacts"])
+    j.result = json.loads(row["result"]) if row["result"] else None
+    j.user_id = row["user_id"]
+    return j
+
+
+def job_load(job_id: str):
     with _lock:
-        row = conn().execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
-        if row is None:
-            return None
-        j = Job(row["skill_id"], json.loads(row["args"]))
-        j.id = row["id"]
-        j.status, j.progress = row["status"], row["progress"]
-        j.message, j.created, j.updated = row["message"], row["created"], row["updated"]
-        j.log = json.loads(row["log"])
-        j.artifacts = json.loads(row["artifacts"])
-        j.result = json.loads(row["result"]) if row["result"] else None
-        j.user_id = row["user_id"]
-        return j
+        row=conn().execute("SELECT * FROM jobs WHERE id=?",(job_id,)).fetchone()
+        return _job_from_row(row) if row else None
+
+
+def task_job_register(job, metadata: dict) -> bool:
+    """任务与恢复元数据一起登记；同 ID 的并发提交不能把已运行任务覆盖回 queued。"""
+    with _lock:
+        c=conn()
+        transaction=c.raw.transaction() if isinstance(c,_PostgresConnection) else c
+        with transaction:
+            result=c.execute("INSERT INTO jobs(id,user_id,skill_id,args,status,progress,message,log,artifacts,result,created,updated) "
+                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                             (job.id,job.user_id,job.skill_id,json.dumps(job.args,ensure_ascii=False),job.status,job.progress,
+                              job.message,json.dumps(job.log),json.dumps(job.artifacts),
+                              json.dumps(job.result,ensure_ascii=False) if job.result is not None else None,job.created,job.updated))
+            if result.rowcount:
+                c.execute("INSERT INTO station_task_control(job_id,user_id,record,updated) VALUES(?,?,?,?)",
+                          (job.id,job.user_id,json.dumps(metadata,ensure_ascii=False),_now()))
+            return bool(result.rowcount)
+
+
+def task_control_create(job_id: str, user_id: str, record: dict) -> None:
+    with _lock:
+        conn().execute("INSERT INTO station_task_control(job_id,user_id,record,updated) VALUES(?,?,?,?) "
+                       "ON CONFLICT(job_id) DO NOTHING",(job_id,user_id,json.dumps(record,ensure_ascii=False),_now()))
+        conn().commit()
+
+
+def task_control_get(job_id: str, user_id: str) -> dict | None:
+    with _lock:
+        row=conn().execute("SELECT * FROM station_task_control WHERE job_id=? AND user_id=?",(job_id,user_id)).fetchone()
+        return {**dict(row),'record':json.loads(row['record'])} if row else None
+
+
+def task_claim(job_id: str, user_id: str, instance: str, boot: str, token: str, seconds: float) -> bool:
+    with _lock:
+        now=_now()
+        result=conn().execute("UPDATE station_task_control SET instance_id=?,boot_id=?,token=?,lease_until=?,"
+                              "cancel_requested=0,updated=? WHERE job_id=? AND user_id=? AND "
+                              "(lease_until<=? OR (instance_id=? AND boot_id<>?))",
+                              (instance,boot,token,now+seconds,now,job_id,user_id,now,instance,boot))
+        conn().commit()
+        return bool(result.rowcount)
+
+
+def task_heartbeat(job_id: str, user_id: str, token: str, seconds: float) -> bool:
+    with _lock:
+        now=_now()
+        result=conn().execute("UPDATE station_task_control SET lease_until=?,updated=? "
+                              "WHERE job_id=? AND user_id=? AND token=? AND lease_until>?",
+                              (now+seconds,now,job_id,user_id,token,now))
+        conn().commit()
+        return bool(result.rowcount)
+
+
+def task_checkpoint(job_id: str, user_id: str, token: str, values: dict) -> bool:
+    with _lock:
+        row=task_control_get(job_id,user_id)
+        if not row or row['token']!=token or row['lease_until']<=_now():return False
+        record={**row['record'],**values}
+        result=conn().execute("UPDATE station_task_control SET record=?,updated=? WHERE job_id=? AND user_id=? AND token=?",
+                              (json.dumps(record,ensure_ascii=False),_now(),job_id,user_id,token))
+        conn().commit()
+        return bool(result.rowcount)
+
+
+def task_release(job_id: str, user_id: str, token: str) -> None:
+    with _lock:
+        conn().execute("UPDATE station_task_control SET lease_until=0,updated=? WHERE job_id=? AND user_id=? AND token=?",
+                       (_now(),job_id,user_id,token))
+        conn().commit()
+
+
+def task_cancel(job_id: str, user_id: str) -> bool:
+    with _lock:
+        result=conn().execute("UPDATE station_task_control SET cancel_requested=1,updated=? WHERE job_id=? AND user_id=?",
+                              (_now(),job_id,user_id))
+        conn().commit()
+        return bool(result.rowcount)
+
+
+def task_job_list(user_id: str, before: tuple | None = None, limit: int = 51) -> list:
+    with _lock:
+        where="user_id=?";args=[user_id]
+        if before:
+            where+=" AND (created<? OR (created=? AND id<?))";args.extend((before[0],before[0],before[1]))
+        rows=conn().execute("SELECT * FROM jobs WHERE "+where+" ORDER BY created DESC,id DESC LIMIT ?",(*args,min(200,max(1,limit)))).fetchall()
+        return [_job_from_row(row) for row in rows]
+
+
+def task_records_many(kind: str, user_id: str, ids: list) -> dict:
+    """固定表白名单的批量读取，列表页不为每个任务单独往返远程数据库。"""
+    with _lock:
+        table,column={"control":("station_task_control","job_id"),"turn":("station_attachment_turns","id"),
+                      "document":("station_documents","id")}[kind]
+        values=list(dict.fromkeys(i for i in ids if i))[:2000]
+        result={}
+        for offset in range(0,len(values),200):
+            batch=values[offset:offset+200]
+            rows=conn().execute("SELECT * FROM "+table+" WHERE user_id=? AND "+column+" IN ("+",".join("?" for _ in batch)+")",
+                                (user_id,*batch)).fetchall()
+            for row in rows:
+                value=json.loads(row['record'])
+                result[row[column]]={**dict(row),'record':value} if kind=='control' else value
+        return result
+
+
+def task_existing_jobs(user_id: str, ids: list) -> set:
+    with _lock:
+        values=list(dict.fromkeys(i for i in ids if i))[:100]
+        if not values:return set()
+        rows=conn().execute("SELECT id FROM jobs WHERE user_id=? AND id IN ("+",".join("?" for _ in values)+")",(user_id,*values)).fetchall()
+        return {r['id'] for r in rows}
+
+
+def task_action_reserve(user_id: str, job_id: str, action: str, client_key: str, next_job_id: str) -> dict:
+    """同一操作编号幂等，同一旧任务只产生一个接续任务；事务锁覆盖多进程竞争。"""
+    with _lock:
+        c=conn()
+        transaction=c.raw.transaction() if isinstance(c,_PostgresConnection) else c
+        with transaction:
+            suffix=" FOR UPDATE" if isinstance(c,_PostgresConnection) else ""
+            control=c.execute("SELECT record FROM station_task_control WHERE job_id=? AND user_id=?"+suffix,(job_id,user_id)).fetchone()
+            existing=c.execute("SELECT * FROM station_task_actions WHERE user_id=? AND client_key=?",(user_id,client_key)).fetchone()
+            if existing:
+                if existing['job_id']!=job_id or existing['action']!=action:raise ValueError('该操作编号已用于其他任务')
+                return dict(existing)
+            if not control:raise ValueError('旧任务缺少执行信息，请回原会话核对')
+            record=json.loads(control['record'])
+            if record.get('successor_id') and record.get('successor_action') not in (None,action):
+                raise ValueError('已有其他接续操作，请查看接续任务')
+            next_job_id=record.get('successor_id') or next_job_id
+            record['successor_id']=next_job_id
+            record['successor_action']=action
+            c.execute("UPDATE station_task_control SET record=?,updated=? WHERE job_id=? AND user_id=?",
+                      (json.dumps(record,ensure_ascii=False),_now(),job_id,user_id))
+            c.execute("INSERT INTO station_task_actions(id,user_id,job_id,action,client_key,next_job_id,created) "
+                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,client_key) DO NOTHING",
+                      (uuid.uuid4().hex,user_id,job_id,action,client_key,next_job_id,_now()))
+            saved=c.execute("SELECT * FROM station_task_actions WHERE user_id=? AND client_key=?",(user_id,client_key)).fetchone()
+            if saved['job_id']!=job_id or saved['action']!=action:raise ValueError('该操作编号已用于其他任务')
+            return dict(saved)
 
 
 # job_list() 已删（09-11）：唯一的调用方是 GET /api/jobs（任务历史列表），

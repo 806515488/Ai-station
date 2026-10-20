@@ -36,6 +36,7 @@ _EXPECTED_TABLES = {
     "interviews", "interview_recordings", "interview_questions",
     "interview_question_spans", "interview_reviews", "interview_actions",
     "station_documents", "station_attachment_turns", "station_traces", "station_trace_spans",
+    "station_task_control", "station_task_actions",
 }
 _EXPECTED_INDEXES = {
     "idx_threads_user", "idx_jobs_user", "idx_states_user",
@@ -43,7 +44,7 @@ _EXPECTED_INDEXES = {
     "idx_interviews_user_updated", "idx_recordings_interview_sequence",
     "idx_questions_interview_sequence", "idx_question_spans_question",
     "idx_reviews_question_version", "idx_actions_interview_status_updated",
-    "idx_traces_thread", "idx_trace_spans_trace",
+    "idx_traces_thread", "idx_trace_spans_trace", "idx_task_control_user", "idx_tasks_created",
 }
 
 
@@ -307,3 +308,30 @@ def test_migrate_legacy_sqlite_without_seq_uses_rowid(pg, tmp_path):
     finally:
         c.close()
     assert seqs["老账号"] < seqs["新账号"], "老库的插入序必须由 rowid 顶上来"
+
+
+def test_task_lease_fencing_and_action_idempotency(pg):
+    from station.jobs.manager import Job
+    user=db.create_user("task-pg-owner","synthetic")["id"]
+    job=Job("archive",{"project":"saved"});job.user_id=user;job.status="failed";job._persist()
+    db.task_control_create(job.id,user,{})
+    assert db.task_claim(job.id,user,"foreign","boot","token",30)
+    assert not db.task_claim(job.id,user,"other","boot","other-token",30)
+    assert not db.task_heartbeat(job.id,user,"wrong",30)
+    assert db.task_checkpoint(job.id,user,"token",{"phase":"remote_wait","remote_id":"saved-remote"})
+    first=db.task_action_reserve(user,job.id,"retry_cached","request","a"*16)
+    again=db.task_action_reserve(user,job.id,"retry_cached","request","b"*16)
+    assert first["next_job_id"]==again["next_job_id"]=="a"*16
+    child=Job("archive",{});child.id="a"*16;child.user_id=user
+    assert db.task_job_register(child,{"parent_job_id":job.id})
+    assert not db.task_job_register(child,{})
+    assert db.task_control_get(child.id,user)["record"]["parent_job_id"]==job.id
+    assert db.task_control_get(job.id,"other-user") is None
+    assert db.task_claim(child.id,user,"first-instance","boot","old-token",30)
+    child._lease_token="old-token";child.status="running";db.job_save(child)
+    db.task_release(child.id,user,"old-token")
+    assert db.task_claim(child.id,user,"new-instance","new-boot","new-token",30)
+    from station.tasks.runtime import LeaseLost
+    child.status="done"
+    with pytest.raises(LeaseLost):db.job_save(child)
+    assert db.job_load(child.id).status=="running"

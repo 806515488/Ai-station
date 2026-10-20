@@ -1,6 +1,6 @@
 """JobManager —— 单用户版异步任务：进程内 worker 线程 + 落盘状态。
 
-状态机：queued → running → done | failed
+状态机：queued → running → done | failed | cancelled；失联/旧记录按租约解释为 interrupted/unknown
   （确认门/awaiting_confirm 已随对话式改造删除 09-07：识别跑完即 done、
   现场落 DB，之后核对/出件由对话里的工具完成——见 skills/archive。）
 
@@ -79,6 +79,10 @@ class Job:
     def _persist(self):
         """把整个 Job 写进 SQLite（jobs 表，见 station/db.py）——崩了重启也能找回。"""
         from station import db
+        if getattr(self, '_lease_token', ''):
+            from station.tasks.runtime import LeaseLost, LEASE_SECONDS
+            if not db.task_heartbeat(self.id,self.user_id,self._lease_token,LEASE_SECONDS):
+                raise LeaseLost()
         db.job_save(self)                 # UPSERT：有则更新无则插入（db 侧自己有写锁）
 
     def snapshot(self, with_log: bool = True) -> dict:
@@ -112,11 +116,19 @@ class JobManager:
         self._active: dict[str, Job] = {}   # 内存表：job_id → Job（≈ Map<String,Job>）
         self._lock = threading.Lock()       # 保护 _active 的锁（提交/移除并发时防竞态）
 
-    def submit(self, skill, args: dict, user_id: str = "", job_id: str = "") -> Job:
+    def submit(self, skill, args: dict, user_id: str = "", job_id: str = "", task_metadata: dict | None = None) -> Job:
         """接一个任务：记进表、开 daemon 线程跑，立刻把 Job 还给调用方（不阻塞）。
 
         user_id：谁提的任务（登录用户；隔离历史列表用）。
         """
+        from station import db
+        from station.tasks import runtime
+        if job_id:
+            existing = Job.load(job_id)
+            if existing:
+                if existing.user_id != user_id or existing.skill_id != skill.id or existing.args != args:
+                    raise ValueError("任务编号已被使用")
+                return existing
         job = Job(skill.id, args)
         if job_id:
             job.id = job_id                 # 宿主先持久化附件轮次引用，再启动 worker，避免抢跑
@@ -128,7 +140,17 @@ class JobManager:
                                            "thread_id": origin.record["thread_id"]}}
             with obs.span("job_submit", "提交后台任务", job_id=job.id, skill=skill.id):
                 pass
-        job._persist()                          # 先落库，保证没跑就有档案
+        metadata=dict(task_metadata or {})
+        caller=runtime.current_origin()
+        if caller and caller[0]==job.user_id and caller[1]:metadata['thread_id']=caller[1]
+        if origin and origin.record['user_id']==job.user_id:
+            metadata.update(thread_id=origin.record['thread_id'],trace_id=origin.record['id'])
+        if not job.result and metadata.get('thread_id') and metadata.get('trace_id'):
+            job.result={'_trace_origin':{'thread_id':metadata['thread_id'],'trace_id':metadata['trace_id']}}
+        if not db.task_job_register(job,metadata):
+            return Job.load(job.id)
+        if not runtime.prepare(job,metadata):
+            return job
         with self._lock:
             self._active[job.id] = job          # 放进“运行中”表
         # 开一个后台线程执行 _run(job, skill)；daemon=True → 主程序退出时线程跟着退，不留孤儿
@@ -136,7 +158,16 @@ class JobManager:
         return job
 
     def _run(self, job: Job, skill):
-        from station import observability as obs
+        from station import db,observability as obs
+        from station.tasks import runtime
+        stop=threading.Event()
+        def heartbeat():
+            while not stop.wait(5):
+                try:
+                    if not db.task_heartbeat(job.id,job.user_id,job._lease_token,runtime.LEASE_SECONDS):return
+                except Exception:return
+        monitor=threading.Thread(target=heartbeat,daemon=True)
+        monitor.start()
         try:
             origin = (job.result or {}).get("_trace_origin")
             if not origin:
@@ -144,20 +175,25 @@ class JobManager:
             trace = obs.begin(job.user_id, origin["thread_id"], kind="job", key="job:"+job.id,
                               origin=origin["trace_id"], attributes={"job_id":job.id,"skill":skill.id})
             with obs.activate(trace):
+                if trace:runtime.checkpoint(job,trace_id=trace.record['id'])
                 try:
                     with obs.span("job", "后台任务", job_id=job.id, skill=skill.id) as step:
                         self._run_impl(job, skill)
                         step.update(artifacts=list(job.artifacts))
                         if job.status == "failed":
                             step.error("JobFailed")
-                    obs.finish(trace, "error" if job.status == "failed" else "success")
+                    obs.finish(trace, {"failed":"error","interrupted":"interrupted","cancelled":"cancelled"}.get(job.status,"success"))
                 except BaseException:
                     obs.finish(trace, "interrupted")
                     raise
         finally:
-            # 追踪收尾也完成后再移出 active，避免恢复/测试切库时还有尾部写入。
-            with self._lock:
-                self._active.pop(job.id, None)
+            stop.set()
+            try:
+                monitor.join()
+                db.task_release(job.id,job.user_id,job._lease_token)
+            finally:
+                # 追踪收尾也完成后再移出 active，避免恢复/测试切库时还有尾部写入。
+                with self._lock:self._active.pop(job.id,None)
 
     def _run_impl(self, job: Job, skill):
         """worker 线程的主方法：喂着 skill.build_runner 生成器跑，直到结束/抛错。"""
@@ -168,6 +204,11 @@ class JobManager:
                       auto_approve=config.AUTO_APPROVE,
                       user_id=job.user_id or "",
                       job_id=job.id)
+        from station import db
+        from station.tasks import runtime
+        ctx.task_checkpoint=lambda **values:runtime.checkpoint(job,**values)
+        ctx.task_cancel=lambda:runtime.check(job)
+        ctx.task_recovery=(db.task_control_get(job.id,job.user_id) or {}).get('record',{})
         # ★ 这条技能吃不吃内存（manifest 的 heavy 字段，见 skills/manifest.py 的说明）。
         #   **必须用 getattr 而不是 skill.heavy**：测试里的假技能（tests/test_heavy.py 的
         #   _Skill/_Slow）是裸类，根本没有这个属性，直接取会 AttributeError；而取不到时
@@ -175,49 +216,74 @@ class JobManager:
         heavy_job = getattr(skill, "heavy", True)
         # 闸里显示的名字：用技能自己的名字（用户看得懂），没有才回落到技能 id。
         skill_name = getattr(skill, "name", "") or job.skill_id
+        gate=None
+        gen=None
         try:
-            if heavy_job:
-                # 排队时先把实话说给用户看（前端进度面板显示的就是这个 message），别让他
-                # 以为任务卡死了 —— 小内存机器上"串行跑"是常态，不是故障。
-                waiting = heavy.busy_with()
-                job.update(status="running",
-                           message=f"排队等「{waiting}」跑完" if waiting else "start")
-                # ★ 重活闸：整条链（识别 + 出件）都在牌子里面。领不到就一直等（wait=None）
-                #   —— 后台任务排队天经地义。**位置必须在最外层**，别挪进 export_pdf 那种
-                #   里层函数：同一线程拿两次同一把锁 = 自己等自己死锁。原因见 core/heavy.py。
-                gate = heavy.heavy_slot(f"{skill_name} {job.id}", wait=None)
-            else:
-                # 网络等待型长活（如 skills/video：几分钟里只在等对端，本地峰值就是最后
-                # 下载的那几 MB）。它进闸只会把档案识别/导出堵住几分钟，收益为负。
-                # ★ 这一支**也不能说"排队"** —— 它确实没在排队，说排队就是撒谎；
-                #   而前端进度面板显示的就是这个 message。
-                job.update(status="running", message="start")
-                gate = contextlib.nullcontext()   # 空闸：with 里什么都不做
+            runtime.check(job)
             from station import observability as obs
             with obs.span("queue", "等待任务执行名额"):
-                gate.__enter__()
+                if heavy_job:
+                    job.update(status="queued",message="排队等待执行名额")
+                    while True:
+                        runtime.check(job)
+                        attempt=heavy.heavy_slot(f"{skill_name} {job.id}",wait=.2)
+                        if attempt.__enter__():
+                            gate=attempt;break
+                        attempt.__exit__(None,None,None)
+                else:
+                    gate=contextlib.nullcontext();gate.__enter__()
+            runtime.check(job)
+            job.update(status="running",message="开始处理")
+            gen=skill.build_runner(ctx,**job.args)
+            if gen is None:raise RuntimeError("build_runner 未返回生成器")
+            while True:
+                runtime.check(job)
+                try:ev=next(gen)
+                except StopIteration:break
+                runtime.check(job)
+                if isinstance(ev,dict):job.append(ev)
+            job.update(status="done",message="完成")
+        except runtime.TaskCancelled:
+            if job.skill_id=='station-documents':
+                turn=db.attachment_turn_get(job.args.get('turn_id',''),job.user_id)
+                if turn:
+                    db.attachment_turn_update(turn['id'],job.user_id,{'state':'cancelled'},expected=('waiting_parse',))
+                    for did,rid in turn.get('run_refs',{}).items():
+                        doc=db.document_get(did,job.user_id)
+                        if not doc:continue
+                        runs=dict(doc.get('runs',{}));run=dict(runs.get(rid,{}))
+                        if run.get('state') not in ('parsing','parsed_ready'):continue
+                        run['state']='partial' if run.get('manifest') else 'cancelled';runs[rid]=run
+                        values={'runs':runs}
+                        if doc.get('latest_run')==rid:values['status']=run['state']
+                        db.document_update(did,job.user_id,values)
+            checkpoint=(db.task_control_get(job.id,job.user_id) or {}).get('record',{})
+            job.update(status="cancelled",message="已停止本地等待，远端任务可能仍在执行" if checkpoint.get('remote_id') else "已取消")
+        except runtime.LeaseLost:
+            job.status="interrupted"  # 已丢失执行权，不能覆盖另一实例保存的状态。
+        except Exception as e:
+            job.update(status="failed",message=f"{type(e).__name__}: {e}")
+            job.append({"type":"log","level":"error","text":traceback.format_exc()})
+        finally:
             try:
-                # build_runner(ctx, **job.args) 返回生成器；**展开把 args dict 变关键字参数
-                gen = skill.build_runner(ctx, **job.args)
-                if gen is None:                 # 防御：技能没给生成器
-                    raise RuntimeError("build_runner 未返回生成器")
-                for ev in gen:                  # 逐个取生成器吐的事件
-                    if isinstance(ev, dict):    # 只认 dict 事件（progress/artifact/log…）
-                        job.append(ev)          # 每收到一个就更新 job + 落盘
+                if gen is not None:
+                    close=getattr(gen,"close",None)
+                    if close:close()
             finally:
-                gate.__exit__(None, None, None)
-            job.update(status="done", message="完成")   # 生成器自然走完 = 成功
-        except Exception as e:                          # noqa  # 任何异常 = 失败
-            job.update(status="failed", message=f"{type(e).__name__}: {e}")
-            # 把完整堆栈存进 log，排查问题用（message 只给一句话人话）
-            job.append({"type": "log", "level": "error", "text": traceback.format_exc()})
+                if gate is not None:gate.__exit__(None,None,None)
 
     def get(self, job_id: str) -> dict | None:
         """查任务状态。正在跑看内存表，跑完了/重启过就从磁盘 load。"""
         job = self._active.get(job_id)
         if job is None:
             job = Job.load(job_id)              # 磁盘兜底
-        return job.snapshot() if job else None
+        if not job:return None
+        from station import db
+        from station.tasks.runtime import state
+        snapshot=job.snapshot()
+        snapshot['status']=state(job,db.task_control_get(job.id,job.user_id))
+        if snapshot['status']=='cancelling':snapshot['message']='取消请求已发送，正在安全停止'
+        return snapshot
 
     def is_active(self, job_id: str) -> bool:
         """任务是否仍有本进程 worker；重启后库里 running 的旧 job 不算活着。"""
@@ -232,7 +298,20 @@ class JobManager:
             job = Job.load(job_id)
             if job is None:
                 return None
-            job.update(status="queued", message="恢复附件处理")
+            from station.tasks import runtime
+            from station import db
+            control=db.task_control_get(job.id,job.user_id)
+            if not control:
+                return None
+            from station.observability.recorder import instance_id
+            local_instance=instance_id()
+            if not local_instance or control['instance_id']!=local_instance:
+                return None
+            if job.skill_id in ('video','interview-coach') and not control['record'].get('remote_id'):
+                return None
+            if not runtime.prepare(job):
+                return None
+            job.update(status="queued", message="恢复后台处理")
             self._active[job_id] = job
         threading.Thread(target=self._run, args=(job, skill), daemon=True).start()
         return job

@@ -515,9 +515,35 @@
   .trace-related{display:block;width:100%;text-align:left;margin:7px 0;padding:9px}
   .trace-note{font-size:12px;color:var(--warn);margin:10px 0}
   @media(max-width:450px){.trace-body{padding:12px}.trace-metrics{gap:5px}.trace-metric{padding:8px}.trace-metric b{font-size:15px}}
+  #taskScrim{position:fixed;inset:0;background:#0006;z-index:74}
+  #taskPanel{position:fixed;inset:0 0 0 auto;width:min(620px,96vw);z-index:75;background:var(--panel);
+    border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-12px 0 40px #0005}
+  .task-head{display:flex;align-items:center;gap:9px;padding:16px;border-bottom:1px solid var(--line)}
+  .task-head b{flex:1}.task-tabs{display:flex;gap:7px;padding:12px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+  .task-tabs button[aria-pressed="true"]{border-color:var(--acc);color:var(--fg);background:#4c8dff18}
+  #taskList{padding:14px 16px;overflow:auto;flex:1;min-height:0}
+  .task-card{border:1px solid var(--line);background:var(--panel2);border-radius:11px;padding:13px;margin-bottom:12px}
+  .task-title{display:flex;gap:9px;align-items:flex-start}.task-title b{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13px}
+  .task-badge{flex:none;font-size:11px;color:#9fb6d8}.task-badge[data-state="done"]{color:#8bc7ab}
+  .task-badge[data-state="failed"],.task-badge[data-state="interrupted"],.task-badge[data-state="partial"]{color:var(--warn)}
+  .task-meta{font-size:11px;color:var(--dim);line-height:1.7;margin-top:7px;overflow-wrap:anywhere}
+  .task-phase{font-size:12px;margin:9px 0;line-height:1.7}.task-phase span{color:var(--dim);margin-right:7px}
+  .task-card progress{width:100%;height:5px;accent-color:var(--acc)}
+  .task-hint{font-size:12px;color:var(--warn);margin:9px 0;line-height:1.7;overflow-wrap:anywhere}
+  .task-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}.task-actions button{font-size:11px}
+  .task-files{display:flex;gap:5px;flex-direction:column;margin-top:8px}.task-files a{font-size:12px;overflow-wrap:anywhere}
+  .task-empty{font-size:13px;color:var(--dim);padding:30px 8px;text-align:center}
+  .task-foot{padding:9px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
 </style>
 </head>
 <body>
+<div id="taskScrim" style="display:none" onclick="closeTasks()"></div>
+<section id="taskPanel" style="display:none" role="dialog" aria-modal="true" aria-label="我的任务">
+  <div class="task-head"><b>我的任务</b><button class="ghost mini" onclick="openTasks()">列表</button>
+    <button class="ghost mini" onclick="refreshTasks()">刷新</button><button class="ghost mini" onclick="closeTasks()" aria-label="关闭我的任务">✕</button></div>
+  <div class="task-tabs" id="taskTabs"></div><div id="taskList"></div>
+  <div class="task-foot">处理结果与回答状态分别显示。恢复操作以原任务的可用结果为准。</div>
+</section>
 <div id="traceScrim" style="display:none" onclick="closeTrace()"></div>
 <section id="tracePanel" style="display:none" role="dialog" aria-modal="true" aria-label="执行详情">
   <div class="trace-head"><b>执行详情</b><button class="ghost mini" onclick="refreshTrace()">刷新</button>
@@ -549,6 +575,7 @@
       <span style="flex:1"></span>
       <button class="ghost mini" title="模型配置（这个站用哪家的 AI）" onclick="toggleConfig(true)">⚙</button>
       <button class="ghost mini" title="MCP 服务（接入外部工具服务）" onclick="toggleMcp(true)">🔌</button>
+      <button class="ghost mini" onclick="openTasks()">我的任务</button>
       <button class="ghost mini" title="我的产物" onclick="toggleProducts(true)">🗂</button>
       <button class="ghost" id="btnNew">新对话</button>
       <span style="width:1px;height:20px;background:var(--line)"></span>
@@ -811,10 +838,10 @@ function toolChip(ev){
     const leaf=String(n||"").split(".").pop();
     const label=String(labels[i]||"").trim()||leaf;      // 技能没写 label → 退回叶子名
     const a=args[i]||{}, keys=Object.keys(a);
-    const detail=String(n||"")+(keys.length?"  "+JSON.stringify(a):"");
+    const detail=esc(`${label}\n${n}`+(keys.length?"\n"+JSON.stringify(a,null,2):""));
     const brief=keys.slice(0,3).map(k=>`${k}=${a[k]}`).join(" ").slice(0,42);
-    return `<span class="ti">⚙</span><span title="${esc(detail)}">${esc(label)}</span>`
-      + (brief?`<span class="ta">${esc(brief)}</span>`:"");
+    return `<span class="ti" title="${detail}">⚙</span><span title="${detail}">${esc(label)}</span>`
+      + (brief?`<span class="ta" title="${detail}">${esc(brief)}</span>`:"");
   }).join(`<span class="ti">·</span>`);
 }
 
@@ -1008,7 +1035,7 @@ async function send(text,opts={}){
     const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({message:text,thread_id:requestedThreadId,
         attachment_ids:opts.attachmentIds||[],client_turn_id:opts.clientTurn||"",
-        resume_turn_id:opts.resumeTurn||"",retry_agent:!!opts.retryAgent})});
+        resume_turn_id:opts.resumeTurn||"",retry_agent:!!opts.retryAgent,reply_only:!!opts.replyOnly})});
     await readSSE(resp,ev=>{
       if(ev.type==="meta"){
         streamThreadId=ev.thread_id||streamThreadId;
@@ -1141,14 +1168,14 @@ async function watchDocumentTurn(turnId,targetThread){
             ${d.error?`<div class="hint">${esc(d.error)}</div>`:""}</div>`;
         }).join("");
         const retry=["failed","interrupted"].includes(data.state)&&data.thread_id?
-          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true})">重试回答</button>`:"";
+          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true,replyOnly:true})">继续回答（保留解析）</button>`:"";
         const cancel=data.state==="waiting_parse"?
           `<button class="ghost mini" onclick="cancelDocumentTurn('${turnId}')">取消处理</button>`:"";
         node.innerHTML=rows+`<div class="hint">${esc(data.job?.message||documentState(data.state))}</div>`+
           `<button class="ghost mini" onclick="toggleProducts(true)">查看产物</button> ${cancel} ${retry}`;
       }
       // 初始 SSE 完成后才恢复，防止两个流同时使用同一组气泡/等待态变量。
-      if(data.state==="ready"&&data.thread_id&&!data.blocked_by_approval&&!(documentSendEpochs.get(epoch)||0)){
+      if(data.state==="ready"&&data.thread_id&&!data.manual_reply&&!data.blocked_by_approval&&!(documentSendEpochs.get(epoch)||0)){
         token.resumed=true;
         await send("",{resumeTurn:turnId});
         if(!owns())break;
@@ -2015,13 +2042,7 @@ function jobWords(snap){ return JOB_WORDS[(snap&&snap.skill_id)||""]||JOB_WORDS.
 //   任务其实好好地跑着（视频任务还没排队那一步，更容易撞上）。
 // ★ 但 queued 不能无限等：万一 worker 线程死在置 running 之前，它会永远 queued。
 //   超过 JOB_STALE 秒没动静就当它结束了（走 done 分支，文案是"失败"，符合实情）。
-const JOB_STALE=120;
-function jobGoing(snap){
-  if(!snap) return false;
-  if(snap.status==="running") return true;
-  if(snap.status!=="queued") return false;
-  return (Date.now()/1000-(snap.updated||0))<JOB_STALE;
-}
+function jobGoing(snap){return !!snap&&['queued','running','cancelling'].includes(snap.status);}
 // 失败原因：后端把死因写成 "ValueError: 创建视频任务失败——…"，异常类名对用户是噪音，
 // 剥掉它；剥完为空才退回最后一条进度文案。都没有就老实说"见任务日志"。
 function jobFailReason(snap){
@@ -2059,6 +2080,9 @@ function setJobEl(jobId, snap, done){
       <span class="hint">${esc(msg||w.doneMsg)}</span>
       ${w.btn?`<button class="mini" onclick="send('${w.say}')">${w.btn}</button>`:""}</div>`
       + w.doneHtml(snap);
+  } else if(done&&['interrupted','unknown','cancelled'].includes(snap.status)){
+    el.innerHTML='<b>'+esc(({interrupted:'任务已中断',unknown:'任务状态待核验',cancelled:'已停止处理'})[snap.status])+'</b><div class="hint">已有结果保留，请到「我的任务」查看可执行的恢复操作。</div>'
+      +'<button class="ghost mini" onclick="openTasks(\''+esc(snap.id)+'\')">查看任务与恢复</button>';
   } else if(done){
     // ★ 失败时**优先用任务自己的 message**（那里才是真正的死因），而不是最后一条进度
     //   文案 —— 建任务就被挡回来的活压根没有进度事件，照原样只会显示一句"详情见任务
@@ -2143,6 +2167,88 @@ async function watchThreadJob(sd, showEnded){
     }
   }catch(e){ /* job 可能刚结束/不存在，静默即可 */ }
 }
+
+// 任务中心展示服务端声明的动作；不在浏览器拼接模型、原件路径或重试参数。
+let taskEpoch=0,taskTimer=null,taskCategory='all',taskFocusId='',taskCursor='',taskRows=[],taskFocus=null;
+const taskActionKeys=new Map(),taskBusy=new Set();
+const TASK_STATES={queued:'排队中',running:'处理中',cancelling:'正在停止',done:'已完成',failed:'处理失败',
+  partial:'部分完成',interrupted:'已中断',unknown:'状态待核验',cancelled:'已取消',waiting_reply:'等待继续回答'};
+const REPLY_STATES={none:'无独立回答步骤',waiting_parse:'等待正文',ready:'正文可用，等待回答',running_agent:'正在回答',
+  done:'已回答',failed:'回答失败',interrupted:'回答中断',cancelled:'已取消'};
+function closeTasks(){taskEpoch++;clearTimeout(taskTimer);$('#taskPanel').style.display='none';$('#taskScrim').style.display='none';taskFocus?.focus();}
+function openTasks(id=''){
+  if($('#taskPanel').style.display==='none')taskFocus=document.activeElement;
+  taskEpoch++;taskFocusId=id;taskCursor='';taskRows=[];
+  $('#taskPanel').style.display='flex';$('#taskScrim').style.display='block';$('#taskList').textContent='正在读取任务…';
+  $('#taskPanel button').focus();refreshTasks();
+}
+function taskFilter(category){taskCategory=category;taskFocusId='';taskCursor='';taskRows=[];refreshTasks();}
+async function refreshTasks(append=false){
+  if($('#taskPanel').style.display==='none')return;
+  clearTimeout(taskTimer);const epoch=++taskEpoch;
+  const cursor=append?taskCursor:'',url=taskFocusId?'/api/tasks/'+encodeURIComponent(taskFocusId):'/api/tasks?category='+taskCategory+'&cursor='+encodeURIComponent(cursor);
+  try{
+    const r=await fetch(url),d=await r.json();if(epoch!==taskEpoch)return;
+    if(!r.ok)throw new Error(d.detail||'读取任务失败');
+    const incoming=taskFocusId?[d]:d.tasks||[];
+    taskRows=append?[...new Map([...taskRows,...incoming].map(t=>[t.id,t])).values()]:incoming;
+    taskCursor=taskFocusId?'':d.next_cursor||'';renderTasks();
+    // 加载过后续页时保留视图，避免自动刷新把用户拉回第一页；手动刷新可更新。
+    if(!append)taskTimer=setTimeout(()=>{if(epoch===taskEpoch)refreshTasks();},2500);
+  }catch(e){if(epoch===taskEpoch)$('#taskList').textContent=String(e.message||'读取失败');}
+}
+function renderTasks(){
+  $('#taskTabs').innerHTML=[['all','全部'],['active','进行中'],['attention','需要处理'],['completed','已完成']].map(([key,label])=>
+    '<button class="ghost mini" data-task-filter="'+key+'" aria-pressed="'+String(taskCategory===key&&!taskFocusId)+'">'+label+'</button>').join('');
+  $('#taskTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>taskFilter(b.dataset.taskFilter));
+  const render=t=>{
+    const working=['queued','running','cancelling'].includes(t.processing_state);
+    const value=['archive','station-documents'].includes(t.type)&&t.processing_state==='running'?' value="'+Math.min(100,Math.max(0,t.progress||0))+'"':'';
+    return '<article class="task-card" data-task="'+esc(t.id)+'"><div class="task-title"><b>'+esc(t.title)+'</b><span class="task-badge" data-state="'+esc(t.status)+'">'+esc(TASK_STATES[t.status]||t.status)+'</span></div>'
+      +'<div class="task-meta">'+esc(fmtWhen(t.created))+' · 任务 '+esc(t.id)+'</div>'
+      +'<div class="task-phase"><span>处理</span>'+esc(TASK_STATES[t.processing_state]||t.processing_state)+'<br><span>回答</span>'+esc(t.reply_state==='ready'&&!t.body_available?'处理报告已保留，暂无可用正文':REPLY_STATES[t.reply_state]||t.reply_state)+'</div>'
+      +(working?'<progress max="100"'+value+'></progress>':'')
+      +(t.message?'<div class="task-meta">'+esc(t.message)+'</div>':'')
+      +(t.hint?'<p class="task-hint">'+esc(t.hint)+'</p>':'')
+      +'<div class="task-files">'+(t.artifacts||[]).map(f=>'<a target="_blank" rel="noopener" href="'+esc(f.url)+'">↗ '+esc(f.name)+'</a>').join('')+'</div>'
+      +'<div class="task-actions">'+(t.actions||[]).map(a=>'<button class="'+(['continue_answer','resume_remote'].includes(a.id)?'mini':'ghost mini')+'" data-task-action="'+esc(a.id)+'"'+(taskBusy.has(t.id)?' disabled':'')+'>'+esc(a.label)+'</button>').join('')
+      +(t.thread_id?'<button class="ghost mini" data-task-thread="'+esc(t.thread_id)+'">返回原会话</button>':'')
+      +(t.trace_id?'<button class="ghost mini" data-task-trace="'+esc(t.trace_id)+'">执行详情</button>':'')
+      +(t.successor_id?'<button class="ghost mini" data-task-next="'+esc(t.successor_id)+'">查看接续任务 →</button>':'')
+      +(t.parent_job_id?'<button class="ghost mini" data-task-next="'+esc(t.parent_job_id)+'">← 原任务</button>':'')+'</div><div class="task-hint task-feedback" aria-live="polite"></div></article>';
+  };
+  $('#taskList').innerHTML=taskRows.map(render).join('')||(taskCursor?'<p class="task-empty">当前页暂无匹配任务，可继续加载。</p>':'<p class="task-empty">暂无匹配任务</p>');
+  if(taskCursor)$('#taskList').insertAdjacentHTML('beforeend','<button class="ghost mini" id="taskMore">加载更多任务</button>');
+  $('#taskMore')?.addEventListener('click',()=>refreshTasks(true));
+  $('#taskList').querySelectorAll('[data-task-action]').forEach(b=>b.onclick=()=>taskAction(b.closest('[data-task]').dataset.task,b.dataset.taskAction,b));
+  $('#taskList').querySelectorAll('[data-task-thread]').forEach(b=>b.onclick=()=>{closeTasks();openThread(b.dataset.taskThread);});
+  $('#taskList').querySelectorAll('[data-task-trace]').forEach(b=>b.onclick=()=>openTrace(b.dataset.taskTrace));
+  $('#taskList').querySelectorAll('[data-task-next]').forEach(b=>b.onclick=()=>openTasks(b.dataset.taskNext));
+}
+async function taskAction(id,action,button){
+  if(taskBusy.has(id))return;taskBusy.add(id);clearTimeout(taskTimer);
+  const key=id+'|'+action;
+  if(!taskActionKeys.has(key))taskActionKeys.set(key,crypto.randomUUID());
+  button.disabled=true;const epoch=taskEpoch;
+  try{
+    const r=await fetch('/api/tasks/'+encodeURIComponent(id)+'/actions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,client_key:taskActionKeys.get(key)})});
+    const d=await r.json();if(!r.ok)throw new Error(d.detail||'操作失败');
+    if(epoch!==taskEpoch)return;
+    if(d.resume_turn_id){closeTasks();await openThread(d.thread_id);await send('',{resumeTurn:d.resume_turn_id,retryAgent:true,replyOnly:true});}
+    else if(d.task&&d.task.id!==id){taskFocusId=d.task.id;taskRows=[d.task];taskCursor='';renderTasks();}
+    else await refreshTasks();
+  }catch(e){if(epoch===taskEpoch){const node=button.closest('.task-card')?.querySelector('.task-feedback');if(node)node.textContent=String(e.message||'操作失败');}}
+  finally{taskBusy.delete(id);button.disabled=false;if($('#taskPanel').style.display!=='none')taskTimer=setTimeout(()=>refreshTasks(),2500);}
+}
+document.addEventListener('keydown',event=>{
+  if($('#taskPanel').style.display==='none'||$('#tracePanel').style.display!=='none')return;
+  if(event.key==='Escape'){closeTasks();event.preventDefault();}
+  if(event.key==='Tab'){
+    const nodes=[...$('#taskPanel').querySelectorAll('button,a')].filter(n=>n.getClientRects().length&&!n.disabled),first=nodes[0],last=nodes.at(-1);
+    if(event.shiftKey&&document.activeElement===first){last?.focus();event.preventDefault();}
+    else if(!event.shiftKey&&document.activeElement===last){first?.focus();event.preventDefault();}
+  }
+});
 
 // 执行详情从追踪表读取，聊天历史只保留关联 ID；旧消息没有采集记录。
 let traceViewId='',traceViewEpoch=0,traceRefreshTimer=null,traceFocus=null;

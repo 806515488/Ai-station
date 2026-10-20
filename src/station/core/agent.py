@@ -95,7 +95,8 @@ def _run_tool_impl(ctx: Context, tool: Tool, args: dict) -> str:
 
 def run_tool(ctx: Context, tool: Tool, args: dict) -> str:
     """记录工具边界；异常状态在转换为业务文本之前采集。"""
-    with obs.span("tool", tool.label or tool.name, tool=tool.name, owner=tool.owner,
+    from station.tasks.runtime import bind_context
+    with bind_context(ctx),obs.span("tool", tool.label or tool.name, tool=tool.name, owner=tool.owner,
                   **obs.input_info(args)) as step:
         out = _run_tool_impl(ctx, tool, args)
         step.update(output_chars=len(out), output_hash=obs.fingerprint(out))
@@ -189,7 +190,7 @@ def run_agent(ctx: Context, thread, skill, model):
     if getattr(ctx, "depth", 0) == 0:
         ctx.web_budget = None  # A reused Context must not carry last turn's counters.
     with obs.span("assembly", "组装本轮工具") as assembly:
-        tools = tools_for(skill, _user)
+        tools = [] if ctx.reply_only else tools_for(skill, _user)
         assembly.update(tools=[{"name": t.name, "owner": t.owner} for t in tools], count=len(tools),
                         schema_hash=obs.fingerprint([t.schema() for t in tools]))
     by_name = {t.name: t for t in tools}
@@ -261,6 +262,9 @@ def run_agent(ctx: Context, thread, skill, model):
 
         # ② 看它要不要调工具：tool_calls 为空 = 它直接说话，就是最终答复
         calls = resp.get("tool_calls") or []
+        if ctx.reply_only and calls:
+            yield Event(EV_ERROR,{"text":"恢复回答时模型仍请求工具调用，已停止以避免重复执行，请重新提问。"})
+            return
         if not calls:
             thread.add({"role": "assistant", "content": text})   # 把答复写进历史（可存盘）
             # 正文在上面已经逐片流过前端了，这里【不能】再发一遍整段，否则会显示两遍
