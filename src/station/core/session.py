@@ -42,6 +42,10 @@ class Thread:
     # ── 消息 ──
     def add(self, msg: dict):
         """往历史里追加一条消息。每追加一次就刷新 updated（前端排序用）。"""
+        from station import observability as obs
+        trace = obs.current()
+        if trace and trace.record['kind'] == 'chat' and trace.record['user_id'] == self.user_id and trace.record['thread_id'] == self.id:
+            msg = {**msg, "trace_id": trace.record['id']}
         self.msgs.append(msg)
         self.updated = _now()
 
@@ -66,7 +70,9 @@ class Thread:
         说不出"这一步到底要写什么"。存下来而不是每次重算：刷新页面后要重画同一张卡片，
         重算可能跟当时不一致。
         """
-        self.meta["pending"] = {"tool": tool, "arguments": arguments,
+        from station import observability as obs
+        trace = obs.current()
+        self.meta["pending"] = {"trace_id": trace.record['id'] if trace else "", "tool": tool, "arguments": arguments,
                                 "preview": preview, "at": _now()}
 
     def clear_pending(self):

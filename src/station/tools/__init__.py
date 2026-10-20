@@ -11,14 +11,15 @@ tools 是空的）。于是"看下 docs/status.md"、"把这段记下来"、"我
 这类**不属于任何业务**的请求，它只能干说。
 
 所以这一层补的就是这个真空：一批和业务无关、**任何对话都用得上**的能力。
-命名空间固定是 `station.`，跟技能工具（`archive.` / `weekly.`）天然不撞名。
+基础工具使用 `station.`，网页检索使用 `web.`；网页工具按用户启用状态和凭据装配。
 
-## 装了什么（共 4 个，09-13 精简过）
+## 装了什么（4 个基础工具 + 2 个可配置网页工具）
 
 | 文件 | 工具 | 干什么 |
 |---|---|---|
 | `memory.py` | `remember` `recall` | 长期记忆（跨会话，落 `data/station/memory/`） |
 | `selfview.py` | `skills` `artifacts` | 我会干啥 / 我产出过什么 |
+| `web.py` | `web.search` `web.fetch` | 原生 DeepSeek 搜索、网页抓取；不经 MCP |
 
 **★ 09-13 删掉了原来的"档一 文件底座"（`fs.py` 的 `ls`/`read`/`grep`/`write`）
 和 `selfview.show`。** 理由是它们属于同一类：**让 AI 看"工作站自己"**（仓库里的
@@ -41,15 +42,15 @@ tools 是空的）。于是"看下 docs/status.md"、"把这段记下来"、"我
 ## 上下文成本（加东西之前先想这条）
 
 全局工具的 schema **每一轮对话都在烧**（`core/agent.py` 的循环每步都把 tools 发出去）。
-现在 4 个约 0.4k token/轮。再往上加就该学 Claude Code 做**按需加载** ——
+基础 4 个约 0.4k token/轮；网页工具仅在本人已配置时提供。再往上加应考虑**按需加载** ——
 先只给工具名，模型要用哪个再展开哪个的 schema。
 """
 from __future__ import annotations
 
 from station.core.tool import Tool
-from station.tools import memory, selfview
+from station.tools import memory, selfview, web
 
-# 命名空间固定是 station. —— 跟技能工具（archive. / weekly.）区分开
+# 基础工具固定为 station.；web 工具保留自己的命名空间与预算。
 NS = "station"
 
 
@@ -73,7 +74,7 @@ def _namespace(raw: list[Tool]) -> list[Tool]:
 GLOBAL_TOOLS = _namespace([
     *memory.tools(),
     *selfview.tools(),
-])
+]) + web.tools()  # web has its own namespace and per-turn network/text budget.
 
 # 叶子名 → 归属：remember / recall → tools/memory.py；skills / artifacts → tools/selfview.py
 

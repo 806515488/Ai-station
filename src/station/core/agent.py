@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 
-from station import config
+from station import config, observability as obs
 from station.core import compact                      # 超长对话压缩（原 core/memory.py）
 from station.core.context import Context
 from station.core.events import (Event, EV_APPROVAL, EV_DELTA, EV_DONE,
@@ -47,7 +47,11 @@ def tools_for(skill, user_id: str = "") -> list[Tool]:
         extra = bridge.mcp_tools(user_id)   # 没有 user_id 时它自己返回空（见该函数注释）
     except Exception:                       # noqa：MCP 那侧坏了绝不拖垮对话（顶多少几个工具）
         extra = []
+    from station.tools import web
+    web_enabled = web.available(user_id)
     for t in [*GLOBAL_TOOLS, *extra, *(getattr(skill, "tools", None) or [])]:
+        if t.owner == "web" and not web_enabled:
+            continue
         if t.name in seen:
             continue
         seen.add(t.name)
@@ -55,7 +59,7 @@ def tools_for(skill, user_id: str = "") -> list[Tool]:
     return out
 
 
-def run_tool(ctx: Context, tool: Tool, args: dict) -> str:
+def _run_tool_impl(ctx: Context, tool: Tool, args: dict) -> str:
     """真正执行一个工具，并把返回值转成字符串（顺带把卡片发进事件流）。
 
     模型只会“点名工具+给参数”，不自己执行 —— 这里由宿主替你调用 tool.run。
@@ -85,7 +89,29 @@ def run_tool(ctx: Context, tool: Tool, args: dict) -> str:
                 return str(out.get("text", ""))
         return str(out)
     except Exception as e:                   # noqa  # 出错也要给模型一个可读结果
+        obs.fail(type(e).__name__)
         return f"工具执行出错: {type(e).__name__}: {e}"
+
+
+def run_tool(ctx: Context, tool: Tool, args: dict) -> str:
+    """记录工具边界；异常状态在转换为业务文本之前采集。"""
+    with obs.span("tool", tool.label or tool.name, tool=tool.name, owner=tool.owner,
+                  **obs.input_info(args)) as step:
+        out = _run_tool_impl(ctx, tool, args)
+        step.update(output_chars=len(out), output_hash=obs.fingerprint(out))
+        return out
+
+
+def _model_stream(model, msgs, tools):
+    # 这里包住一次 agent 决策；model.py 再记录这次决策中的每个通道尝试。
+    with obs.span("model", "主模型请求", message_count=len(msgs),
+                  tools=[t.name for t in tools], **obs.input_info(msgs)) as step:
+        for part in model.stream(msgs, tools or None):
+            if "final" in part:
+                final = part["final"]
+                step.update(tool_calls=[c.get("name", "") for c in final.get("tool_calls", [])],
+                            output_chars=len(final.get("content", "")), usage=final.get("usage"))
+            yield part
 
 
 # 同一轮里，**全局工具**（owner=="station"）最多执行几次。
@@ -160,7 +186,12 @@ def run_agent(ctx: Context, thread, skill, model):
     # 这次能用的工具清单 = 全局工具 + 技能工具（见 tools_for）；
     # by_name 把名字映射成工具对象，执行时好按名字找到它
     _user = getattr(ctx, "user_id", "") or ""
-    tools = tools_for(skill, _user)
+    if getattr(ctx, "depth", 0) == 0:
+        ctx.web_budget = None  # A reused Context must not carry last turn's counters.
+    with obs.span("assembly", "组装本轮工具") as assembly:
+        tools = tools_for(skill, _user)
+        assembly.update(tools=[{"name": t.name, "owner": t.owner} for t in tools], count=len(tools),
+                        schema_hash=obs.fingerprint([t.schema() for t in tools]))
     by_name = {t.name: t for t in tools}
     used_global: dict[str, int] = {}     # 这一轮里各全局工具调了几次（防打转，见 _GLOBAL_TOOL_CAP）
 
@@ -171,6 +202,8 @@ def run_agent(ctx: Context, thread, skill, model):
     sys_prompt = (getattr(ctx, "system", "") or "").strip()
     _notes = [jobs_note(thread)]
     if _user:
+        from station.tools import web
+        _notes.append(web.system_note(_user, enabled=any(t.owner == "web" for t in tools)))
         try:
             from station.mcp import bridge
             _notes.append(bridge.system_note(_user))
@@ -203,7 +236,7 @@ def run_agent(ctx: Context, thread, skill, model):
             # 整段跑完再给出 final（与 respond 的返回值同形），用于判断要不要调工具。
             resp = None
             sent = ""                          # 已经发给前端的文字，用来算“还差多少没发”
-            for part in model.stream(msgs, tools or None):
+            for part in _model_stream(model, msgs, tools):
                 if "delta" in part:
                     sent += part["delta"]
                     yield Event(EV_DELTA, {"text": part["delta"]})
@@ -294,7 +327,7 @@ def run_agent(ctx: Context, thread, skill, model):
         for c in calls:
             name, args = c.get("name"), c.get("arguments") or {}
             tool = by_name.get(name)
-            # 全局工具用 owner 判（不是按名字前缀硬编码）—— owner 就是装载时写进去的那个字段
+            # station 基础工具用 owner 判；web 检索由自己的请求/正文预算约束。
             is_global = getattr(tool, "owner", "") == "station"
             if tool is None:
                 # 理论上不会发生（calls 是模型对着 tools 说的），但防御一手：

@@ -23,7 +23,7 @@ import threading
 import time
 import uuid
 
-from station import config
+from station import config, observability as obs
 
 # 三家服务商的接入信息：base_url=接口根地址，text/vision=各自用的模型名，key=读哪个环境变量。
 # ★ 09-10 起这张表**只是"没给降级链时的老路径兜底"**（`Model(entries=None)`）：正式路径
@@ -318,7 +318,12 @@ def _from_resp(resp, back: dict | None = None) -> dict:
         tcs.append({"id": cid,
                     "name": name,
                     "arguments": _tc(tc, "args") or {}})
-    return {"content": content, "tool_calls": tcs}
+    result = {"content": content, "tool_calls": tcs}
+    usage = getattr(resp, "usage_metadata", None)
+    if isinstance(usage, dict):
+        result["usage"] = {k: usage[k] for k in ("input_tokens", "output_tokens", "total_tokens")
+                           if isinstance(usage.get(k), int) and not isinstance(usage[k], bool) and usage[k] >= 0}
+    return result
 
 
 def _stream_parts(chunks, back: dict | None = None):
@@ -534,18 +539,22 @@ class Model:
         for rnd in range(self._retries + 1):
             for entry, budget in self._attempts(t0):
                 try:
-                    # bind_tools([每个工具 schema]) 让模型在对话里能输出 tool_calls
-                    llm = self._client(entry, budget)
-                    if schemas:
-                        llm = llm.bind_tools(schemas)
-                    return _from_resp(llm.invoke(_to_llm(msgs)), back)
+                    with obs.span("model_attempt", "模型通道尝试", round=rnd+1, **obs.model_info(entry)) as attempt_step:
+                        # bind_tools([每个工具 schema]) 让模型在对话里能输出 tool_calls
+                        llm = self._client(entry, budget)
+                        if schemas:
+                            llm = llm.bind_tools(schemas)
+                        response = _from_resp(llm.invoke(_to_llm(msgs)), back)
+                        attempt_step.update(usage=response.get("usage"), output_chars=len(response.get("content", "")))
+                        return response
                 except Exception as e:          # noqa：这一家不行 → 记下换下一家
                     last = e
             wait = self._retry_wait(rnd)
             if wait is None or not _is_transient(last):
                 break                           # 注定失败或轮次用完 → 别再让用户等
             self._notify_retry(on_retry, rnd + 1, self._retries, wait, last)
-            time.sleep(wait)
+            with obs.span("backoff", "等待重试", attempt=rnd+1, wait_seconds=wait):
+                time.sleep(wait)
         raise RuntimeError(self._fail_msg(last))
 
     def stream(self, msgs: list[dict], tools=None):
@@ -574,17 +583,22 @@ class Model:
             for entry, budget in self._attempts(t0):
                 sent_any = False                  # 这一家已经往外吐过字没有
                 try:
-                    # 绑了工具才能流式收到 tool_calls（langchain 的 RunnableBinding 会转发流）
-                    llm = self._client(entry, budget)
-                    if schemas:
-                        llm = llm.bind_tools(schemas)
-                    # 注意：_stream_parts 是【生成器】，异常是在消费到那一片时才抛出来的，
-                    # 所以 try 必须把整个 for 包住，不能只包它的构造。
-                    for part in _stream_parts(llm.stream(_to_llm(msgs)), back):
-                        if "delta" in part:
-                            sent_any = True
-                        yield part
-                    return                        # 整段跑完 = 这次成功
+                    with obs.span("model_attempt", "模型通道尝试", round=rnd+1, **obs.model_info(entry)) as attempt_step:
+                        # 绑了工具才能流式收到 tool_calls（langchain 的 RunnableBinding 会转发流）
+                        llm = self._client(entry, budget)
+                        if schemas:
+                            llm = llm.bind_tools(schemas)
+                        # 注意：_stream_parts 是【生成器】，异常是在消费到那一片时才抛出来的，
+                        # 所以 try 必须把整个 for 包住，不能只包它的构造。
+                        for part in _stream_parts(llm.stream(_to_llm(msgs)), back):
+                            if "delta" in part:
+                                sent_any = True
+                                if "first_text_ms" not in attempt_step.record["attributes"]:
+                                    attempt_step.update(first_text_ms=round((time.monotonic()-attempt_step.started)*1000, 2))
+                            if "final" in part:
+                                attempt_step.update(usage=part["final"].get("usage"), output_chars=len(part["final"].get("content", "")))
+                            yield part
+                        return                        # 整段跑完 = 这次成功
                 except Exception as e:            # noqa：不能捕 BaseException，
                     # 否则会把客户端断连的 GeneratorExit 也吃掉、生成器停不下来。
                     if sent_any:
@@ -597,7 +611,8 @@ class Model:
                 break                             # 注定失败或轮次用完 → 别再让用户等
             # 先把"要重连"告诉前端，再睡 —— 否则用户面对的是没有任何解释的长时间静默
             yield {"retry": {"attempt": rnd + 1, "total": self._retries, "wait": wait}}
-            time.sleep(wait)
+            with obs.span("backoff", "等待重试", attempt=rnd+1, wait_seconds=wait):
+                time.sleep(wait)
         raise RuntimeError(self._fail_msg(last))
 
 

@@ -6,11 +6,9 @@
   （同是 deepseek，一边写 `deepseek-flash`、一边写 `deepseek-v4-flash`）。
   现在收敛到这一份：**内置表在这、用户的改动存 DB、解析成"可建连的条目"也在这**。
 
-两个核心概念（别混）：
-  - **provider（服务商）= 连接 + 模型名**：base_url、api_key、以及各能力对应的
-    模型名（text_model / vision_model / route_model / video_model / speech_model）。
-  - **slot（槽位）= 用谁、按什么顺序**：一个有序的 provider id 列表，第一位是主通道，
-    后面是降级顺序。当前槽位见 SLOT_LABELS。
+三个核心概念：provider 保存共享连接与密钥；models[] 保存各模型名称、能力和参数；
+slot 保存有序的 provider~model 引用，第一位是主通道。旧 role 字段与 provider 引用仍可读，
+界面转换由 modelcatalog 管理，读取不改数据库。
 
 新手视角（Java 朋友版）：这个文件 ≈ 一份"数据源配置 + 解析器"，纯数据、不联网、
 不 import langchain。它只回答两件事：
@@ -28,12 +26,26 @@ import copy
 import math
 import os
 import re
+from urllib.parse import urlsplit
 
-from station import config, db
+from station import config, db, modelcatalog as catalog
 
 # 配置格式版本：将来结构大改时 +1。读到比这更大的版本不猜，回默认并给 warn。
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 ROUTE_PROTOCOLS = ("chat_completions", "systemone")
+DEFAULT_WEB_SEARCH = {"enabled": True, "provider_id": "deepseek"}
+
+
+def official_search_source(provider: dict) -> bool:
+    """Search credentials may only be used against DeepSeek's official origin."""
+    try:
+        u = urlsplit(provider.get("base_url") or "")
+        return (u.scheme == "https" and u.hostname == "api.deepseek.com"
+                and u.port in (None, 443) and u.path.rstrip("/") in ("", "/v1")
+                and u.username is None and u.password is None and not (u.query or u.fragment)
+                and ("models" in provider or provider.get("route_protocol") != "systemone"))
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 # 槽位：id → 给人看的名字 + 一句人话说明（前端直接用）。
 # 名字刻意用大白话：这个弹窗是给不写代码的人用的，"路由判词""建档"这类内部叫法
@@ -200,6 +212,9 @@ def _api_key(p: dict, allow_env: bool = True) -> str:
 
 def _model_for(p: dict, slot: str) -> str:
     """这家 provider 在某个槽位该用哪个模型名；不适合这个槽位返回 ''。"""
+    if "models" in p:
+        model = catalog.select(p, slot)
+        return model["name"] if model else ""
     # System One 是决策接口；这一来源只允许参与意图识别。
     if p.get("route_protocol") == "systemone" and slot != "route":
         return ""
@@ -224,13 +239,16 @@ def _scheme_ok(url: str) -> bool:
 def chain_label(entries: list) -> str:
     """把一条链压成一个短标签，用于**缓存键**（如 OCR 缓存："谁读的这一页"）。
 
-    取链首 provider 的 id（不是模型名）。这样：内置三家的标签与改造前**完全一致**
-    （qwen/glm/deepseek），老缓存照常命中、不白花一次重读钱；换了 provider 标签就变，
-    不会把上一家读出来的结果当成这一家的。
-
-    已知取舍：在**同一个 provider 里改模型名**不会让 OCR 缓存失效（标签没变）——
-    真要重读就换个 provider，或删掉 data/ocr_cache 里对应的条目。见 docs/pitfalls.md。
+    新模型使用 profile 引用与模型名/协议/地址的摘要，避免同来源的不同模型共用结果。
+    未改变的旧识图模型保留原 provider 标签，界面升级不会导致已有 OCR 缓存失效。
     """
+    if entries and entries[0].get("legacy_cache_id"):
+        return entries[0]["legacy_cache_id"]
+    if entries and entries[0].get("model_id"):
+        import hashlib
+        item = entries[0]
+        digest = hashlib.sha256((item["model"] + "|" + item.get("route_protocol", "") + "|" + item.get("base_url", "")).encode()).hexdigest()[:8]
+        return item["id"] + "-" + digest
     return entries[0]["id"] if entries else ""
 
 
@@ -299,6 +317,7 @@ def default_config() -> dict:
         providers.append(p)
     return {"version": CURRENT_VERSION,
             "providers": providers,
+            "web_search": dict(DEFAULT_WEB_SEARCH),
             "slots": _default_slots(providers)}
 
 
@@ -337,14 +356,17 @@ def _normalize(raw: dict) -> dict:
     for slot in SLOT_LABELS:
         chain = (cfg.get("slots") or {}).get(slot) or []
         # 悬空 id（provider 被删了但链里还留着）静默剔除，并在末尾空时补上默认
-        clean = [pid for pid in chain
-                 if isinstance(pid, str) and pid in ids]
-        if not clean:
+        clean = [ref for ref in chain if isinstance(ref, str) and catalog.split(ref)[0] in ids
+                 and (not catalog.split(ref)[1] or catalog.select(_by_id({"providers": providers}, catalog.split(ref)[0]), slot, catalog.split(ref)[1]))]
+        explicit_empty = slot in (cfg.get("slots") or {}) and chain == [] and any("models" in p for p in providers)
+        if not clean and not explicit_empty:
             clean = _default_slots(providers).get(slot) or []
         slots[slot] = clean[:MAX_CHAIN]
 
     cfg["providers"] = providers
     cfg["slots"] = slots
+    if "web_search" not in cfg:
+        cfg["web_search"] = dict(DEFAULT_WEB_SEARCH)
     return cfg
 
 
@@ -435,7 +457,7 @@ def _validate(cfg: dict) -> list[str]:
     for slot in SLOT_LABELS:
         chain = (cfg.get("slots") or {}).get(slot) or []
         if isinstance(chain, list):
-            used |= {str(x) for x in chain}
+            used |= {catalog.split(x)[0] for x in chain}
 
     ids: set[str] = set()
     by_id: dict[str, dict] = {}
@@ -455,16 +477,17 @@ def _validate(cfg: dict) -> list[str]:
             continue
         ids.add(pid)
         by_id[pid] = p
-        protocol = p.get("route_protocol", "chat_completions")
+        typed = "models" in p
+        protocol = p.get("route_protocol", "chat_completions") if not typed else "chat_completions"
         if protocol not in ROUTE_PROTOCOLS:
             problems.append(f"{_name(p)} 的意图识别接口类型不支持")
-        if protocol == "systemone" and p.get("base_url"):
+        if (protocol == "systemone" or any(m.get("route_protocol") == "systemone" for m in catalog.models(p))) and p.get("base_url"):
             from station.core.systemone import endpoint
             try:
                 endpoint(p["base_url"])
             except (ValueError, TypeError, AttributeError):
                 problems.append(f"{_name(p)} 需填写接口根地址，例如 https://opencode.ai/zen/v1")
-        threshold = p.get("route_threshold")
+        threshold = p.get("route_threshold") if not typed else None
         if threshold not in (None, ""):
             if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
                     or not math.isfinite(threshold) or not 0 <= threshold <= 1):
@@ -479,7 +502,7 @@ def _validate(cfg: dict) -> list[str]:
         # ★ 取值卡死在这里，别让脏值流到运行时：发一个对端不认的档位 = 400 →
         #   4xx 不重试 → 降级链**静默换家**，用户只会觉得"怎么换了模型/变笨了"。
         #   留空是合法的（= 一个字都不发），所以只有非空才查。
-        eff = str(p.get("reasoning_effort") or "").strip()
+        eff = str(p.get("reasoning_effort") or "").strip() if not typed else ""
         if eff and eff not in REASONING_EFFORTS:
             problems.append(
                 f"{_name(p)} 的「推理强度」只能填 "
@@ -500,15 +523,27 @@ def _validate(cfg: dict) -> list[str]:
             continue
         if len(chain) > MAX_CHAIN:
             problems.append(f"「{label}」的备用顺序过长（最多 {MAX_CHAIN} 个）")
-        for pid in chain:
+        for ref in chain:
+            pid, mid = catalog.split(ref)
             if pid not in by_id:
                 problems.append(f"「{label}」中包含已不存在的来源：{pid}")
+            elif mid and catalog.select(by_id[pid], slot, mid) is None:
+                problems.append(f"「{label}」所选模型不存在或不支持该能力")
             elif not _model_for(by_id[pid], slot):
                 # 这一行为什么需要它、它就缺什么 —— 直接点名，用户才知道去哪一格填。
                 # 例：看图行放了纯文字模型 → 识别时整卷报 400；视频行放了对话模型 →
                 # 建任务时 400。都在保存这关拦住，别变成运行时的天书报错。
                 # ★ 文案用界面上的行名（SLOT_LABELS），和用户眼睛看到的字对得上。
                 problems.append(f"{_name(by_id[pid])} 未填写「{label}」")
+    web = cfg.get("web_search", {"enabled": False, "provider_id": ""})
+    if not isinstance(web, dict) or not isinstance(web.get("enabled"), bool):
+        problems.append("网页检索配置格式不正确")
+    else:
+        pid = web.get("provider_id")
+        if not isinstance(pid, str):
+            problems.append("网页检索来源格式不正确")
+        elif pid and (pid not in by_id or not official_search_source(by_id[pid])):
+            problems.append("网页检索需选择官方 DeepSeek 来源（https://api.deepseek.com）")
     return problems
 
 
@@ -534,12 +569,32 @@ def save_config(user_id: str, incoming: dict) -> dict:
     #   （用户填了、保存也不报错，就是下次打开发现空了）。
     _KEEP = ("id", "label", "base_url", "text_model", "vision_model",
              "route_model", "speech_model", "video_model", "key_env", "api_key",
-             "reasoning_effort", "route_protocol", "route_threshold")
+             "reasoning_effort", "route_protocol", "route_threshold", "models")
     cfg["providers"] = [{k: p[k] for k in _KEEP if k in p}
                         for p in (cfg.get("providers") or []) if isinstance(p, dict)]
 
     # —— key 三态合并：拿库里上一版对照 ——
     prev = db.model_config_load(user_id) or {}
+    previous = {p.get("id"): p for p in prev.get("providers", []) if isinstance(p, dict)}
+    for p in cfg["providers"]:
+        old = previous.get(p.get("id"), {})
+        if "models" not in p and "models" in old:
+            if any(k in p and p[k] != old.get(k, "") for k in catalog.ROLES.values()):
+                raise ValueError("配置已包含多个模型，请刷新页面后编辑")
+            p["models"] = copy.deepcopy(old["models"])
+        if "models" in p:
+            p["models"] = catalog.clean(p["models"])
+    # Old clients submit providers/slots only: preserve the saved search choice.
+    web = cfg.get("web_search", prev.get("web_search", DEFAULT_WEB_SEARCH))
+    if isinstance(web, dict):
+        web = {k: web[k] for k in ("enabled", "provider_id") if k in web}
+        old_ids = {p.get("id") for p in prev.get("providers", [])}
+        new_ids = {p.get("id") for p in cfg.get("providers", [])}
+        if isinstance(web.get("provider_id"), str) and web["provider_id"] in old_ids - new_ids:
+            web["provider_id"] = ""
+        if "web_search" not in cfg and isinstance(web.get("provider_id"), str) and web["provider_id"] not in new_ids:
+            web["provider_id"] = ""
+    cfg["web_search"] = copy.deepcopy(web)
     prev_keys = {p.get("id"): (p.get("api_key") or "")
                  for p in (prev.get("providers") or []) if isinstance(p, dict)}
     for p in cfg.get("providers") or []:
@@ -559,11 +614,23 @@ def save_config(user_id: str, incoming: dict) -> dict:
             cfg["slots"].pop(slot, None)         # 不认识的槽位直接丢弃
     for slot in SLOT_LABELS:
         chain = (cfg.get("slots") or {}).get(slot) or []
-        cfg.setdefault("slots", {})[slot] = [pid for pid in chain if pid in ids]
+        keep = []
+        for ref in chain:
+            pid, mid = catalog.split(ref)
+            if pid not in ids:
+                continue
+            now = next(p for p in cfg["providers"] if p["id"] == pid)
+            old = previous.get(pid, {})
+            if mid and catalog.select(old, slot, mid) and not any(m.get("id") == mid for m in catalog.models(now)):
+                continue  # Deleting a known model removes only its own bindings.
+            keep.append(ref)
+        cfg.setdefault("slots", {})[slot] = keep
 
     problems = _validate(cfg)
     if problems:
         raise ValueError("；".join(problems))
+
+    cfg["version"] = 2 if any("models" in p for p in cfg["providers"]) else 1
 
     cfg.pop("warn", None)                        # warn 只是给前端看的临时字段
     db.model_config_save(user_id, cfg)
@@ -573,6 +640,25 @@ def save_config(user_id: str, incoming: dict) -> dict:
 def delete_config(user_id: str) -> None:
     """恢复默认：把库里那份删掉（下次 load_config 又回到内置默认）。"""
     db.model_config_delete(user_id)
+
+
+def search_entry(user_id: str) -> tuple[dict | None, str]:
+    """Resolve at call time; no text-model name is required, no shared user secrets."""
+    if not user_id:
+        return None, "网页检索需要登录"
+    config.load_env()
+    cfg = load_config(user_id)
+    web = cfg.get("web_search")
+    if not isinstance(web, dict) or web.get("enabled") is not True:
+        return None, "网页检索已关闭"
+    pid = web.get("provider_id")
+    p = _by_id(cfg, pid) if isinstance(pid, str) else None
+    if p is None or not official_search_source(p):
+        return None, "请在模型配置的网页检索中选择官方 DeepSeek 来源"
+    key = _api_key(p, db.is_owner(user_id))
+    if not key:
+        return None, "网页检索缺少密钥，请在模型配置中填写所选来源的 DeepSeek API Key"
+    return {"id": p["id"], "api_key": key}, ""
 
 
 # ── 解析成"可建连的条目" ──────────────────────────────────────────────
@@ -599,45 +685,57 @@ def resolve(user_id: str, slot: str) -> list[dict]:
         if pid in seen:
             continue
         seen.add(pid)
-        p = _by_id(cfg, pid)
+        source_id, model_id = catalog.split(pid)
+        p = _by_id(cfg, source_id)
         if p is None:
             continue
-        e = _entry(p, slot, allow_env)
+        e = _entry(p, slot, allow_env, model_id)
         if e is None:                # 这家不参与该槽位（例如没填 vision 模型名）
             continue
         out.append(e)
     return out
 
 
-def _entry(p: dict, slot: str, allow_env: bool) -> dict | None:
+def _entry(p: dict, slot: str, allow_env: bool, model_id: str = "") -> dict | None:
     """把一家 provider 解析成一条"可建连的 entry"；这家在该槽位没有模型名就返回 None。
 
     ★ 形状只有这一处定义（resolve 的每条、resolve_one 的单条都走这里）：
       调用方拿到的 entry 长什么样必须一致，否则"链里那家"和"单独指定那家"
       行为会悄悄不同。
     """
-    model = _model_for(p, slot)
+    profile = catalog.select(p, slot, model_id) if "models" in p or model_id else None
+    if ("models" in p or model_id) and profile is None:
+        return None
+    model = profile["name"] if profile else _model_for(p, slot)
     if not model:
         return None
     pid = p.get("id") or ""
-    return {"id": pid,
-            "label": p.get("label") or pid,
+    options = profile if profile else p
+    entry = {"id": catalog.reference(pid, profile["id"]) if profile else pid,
+            "label": ((p.get("label") or pid) + " / " + (profile.get("label") or model)) if profile else (p.get("label") or pid),
             "base_url": (p.get("base_url") or "").strip(),
             "api_key": _api_key(p, allow_env),
             "key_env": p.get("key_env") or "",
             "allow_env": allow_env,          # 给 Model 选报错文案用
             "model": model,
             "slot": slot,
-            "route_protocol": p.get("route_protocol", "chat_completions"),
-            "route_threshold": p.get("route_threshold"),
+            "route_protocol": options.get("route_protocol", "chat_completions"),
+            "route_threshold": options.get("route_threshold"),
             # 空串 = **一个字都不发**（不是"发个空的"）。见 REASONING_EFFORTS 的说明：
             # 不认这个参数的家收到它会 400，而 400 会让降级链静默换家。
             # ★★ 只对**通用模型（chat）**那一条生效，别的槽位一律空串、不发：
             #    这是"对话要多想多久"的档位 —— 判词要的是快（它本来就有 10 秒总预算）、
             #    视频压根不是对话模型、识图走的是另一条链。给它们发没有任何意义，
             #    只会多一个"对端不认就 400 → 静默换家"的机会。
-            "reasoning_effort": ((p.get("reasoning_effort") or "").strip()
+            "reasoning_effort": ((options.get("reasoning_effort") or "").strip()
                                  if slot == "chat" else "")}
+    if profile:
+        entry.update(provider_id=pid, model_id=profile["id"])
+        if slot == "vision":
+            legacy = catalog.select({k: v for k, v in p.items() if k != "models"}, slot)
+            if legacy and legacy["id"] == profile["id"] and legacy["name"] == profile["name"]:
+                entry["legacy_cache_id"] = pid
+    return entry
 
 
 def resolve_one(user_id: str, provider_id: str, slot: str) -> list[dict]:
@@ -647,10 +745,11 @@ def resolve_one(user_id: str, provider_id: str, slot: str) -> list[dict]:
     （用户可能就是想单独拿某家跑一遍对比）。返回形状与 resolve 的每条一致。
     """
     cfg = load_config(user_id)
-    p = _by_id(cfg, provider_id)
+    pid, mid = catalog.split(provider_id)
+    p = _by_id(cfg, pid)
     if p is None:
         return []
-    e = _entry(p, slot, db.is_owner(user_id))
+    e = _entry(p, slot, db.is_owner(user_id), mid)
     return [e] if e else []
 
 
@@ -663,16 +762,24 @@ def vision_providers(user_id: str) -> list[dict]:
     其余按配置顺序在后。**不含 key**（只用来报菜单，不建客户端）。
     """
     cfg = load_config(user_id)
-    chain = [pid for pid in ((cfg.get("slots") or {}).get("vision") or [])]
-    out: list[dict] = []
-    for p in cfg.get("providers") or []:
-        model = _model_for(p, "vision")
-        if not model:                # 没填识图模型名 → 这家看不了图，不进菜单
+    chain = []
+    for ref in (cfg.get("slots") or {}).get("vision", []):
+        pid, mid = catalog.split(ref)
+        p = _by_id(cfg, pid)
+        if not p:
             continue
-        pid = p.get("id") or ""
-        out.append({"id": pid, "label": p.get("label") or pid,
-                    "model": model, "in_chain": pid in chain,
-                    "order": chain.index(pid) if pid in chain else len(chain) + 1})
+        m = catalog.select(p, "vision", mid) if "models" in p or mid else None
+        chain.append(catalog.reference(pid, m["id"]) if m else ref)
+    out = []
+    for p in cfg.get("providers") or []:
+        variants = [(catalog.reference(p["id"], m["id"]), m["name"], m.get("label") or m["name"])
+                    for m in catalog.models(p) if "vision" in m.get("capabilities", [])] if "models" in p else []
+        if "models" not in p and _model_for(p, "vision"):
+            variants = [(p["id"], _model_for(p, "vision"), "")]
+        for ref, name, label in variants:
+            out.append({"id": ref, "label": (p.get("label") or p["id"]) + (" / " + label if label else ""),
+                        "model": name, "in_chain": ref in chain,
+                        "order": chain.index(ref) if ref in chain else len(chain) + 1})
     out.sort(key=lambda d: d["order"])
     return out
 
@@ -689,7 +796,7 @@ def presets() -> list[dict]:
 
 
 def probe_entry(user_id: str, provider_id: str,
-                slot: str = "") -> tuple[str, str, str, str, str]:
+                slot: str = "", model_id: str = "") -> tuple[str, str, str, str, str]:
     """给「试一下能不能用」端点用：从**已保存的**配置里取 (base_url, api_key, model, slot)。
 
     刻意只认已保存的 provider id、**不接受裸 URL** —— 这样"测试"这个动作对外能到达
@@ -705,11 +812,20 @@ def probe_entry(user_id: str, provider_id: str,
       把"参数被拒"和"连不上"分开报（见 app/server.py 的测试端点）。
     """
     cfg = load_config(user_id)
-    p = _by_id(cfg, provider_id)
+    pid, mid = catalog.split(provider_id)
+    model_id = model_id or mid
+    p = _by_id(cfg, pid)
     if p is None:
         raise ValueError("未找到该模型来源，请先保存配置")
     # video 排最后：内置那几家、以及用户自己加的家都是先命中 chat，行为一字不变；
     # 只有"除了视频模型名什么都没有"的家（agnes）才会落到 video。
+    if "models" in p or model_id:
+        order = [slot] if slot else ["chat", "vision", "route", "speech", "video"]
+        for s in order:
+            entry = _entry(p, s, db.is_owner(user_id), model_id)
+            if entry:
+                return entry["base_url"], entry["api_key"], entry["model"], s, entry["reasoning_effort"]
+        raise ValueError("该模型不存在或不支持所选能力")
     order = ([slot] if slot else []) + ["chat", "vision", "route", "speech", "video"]
     for s in order:
         m = _model_for(p, s)

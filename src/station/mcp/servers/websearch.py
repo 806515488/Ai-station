@@ -1,4 +1,7 @@
-"""内置 MCP server：网页搜索（零 key）。
+"""保留的旧网页搜索 MCP（零 key，默认不注册）。
+
+默认网页能力已迁至原生 web.search/web.fetch；仅操作员显式设置
+STATION_LEGACY_SEARCH_MCP=1 时，宿主才注册此旧服务，或独立运行本模块。
 
 新手视角（Java 朋友版）：
   这是一个**独立的小程序**，不是一个类库 —— 宿主会 `python -m station.mcp.servers.websearch`

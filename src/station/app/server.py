@@ -44,6 +44,7 @@ from pydantic import BaseModel                       # 请求体模型：像 Jav
 
 from station import config, db
 from station.core import guards
+from station import observability as obs
 from station.core.agent import run_agent, run_tool  # 大脑循环 + 执行单个工具
 from station.core.context import Context
 from station.core.router import (l1_route, l2_route, log_route,  # 三层意图漏斗 + 路由日志
@@ -95,7 +96,13 @@ def _make_model(skill, user_id: str = ""):
 async def _lifespan(_app):
     from station.documents.service import recover
     recover()
-    yield
+    try:
+        yield
+    finally:
+        from station.search import client, service
+        import asyncio
+        await asyncio.to_thread(client.close)
+        service.clear_cache()
 
 
 app = FastAPI(title="station · 个人 AI 工作站", lifespan=_lifespan)
@@ -234,12 +241,14 @@ class ModelConfigIn(BaseModel):
     """PUT /api/modelconfig 的请求体：整包 provider 列表 + 各槽位的降级链。"""
     providers: list = []
     slots: dict = {}
+    web_search: dict | None = None
 
 
 class ProviderTestIn(BaseModel):
     """POST /api/modelconfig/test 的请求体。slot 留空=自动挑一个这家有的模型名。"""
     provider_id: str
     slot: str = ""
+    model_id: str = ""
 
 
 def _cfg_payload(user: dict, cfg: dict | None = None) -> dict:
@@ -254,7 +263,10 @@ def _cfg_payload(user: dict, cfg: dict | None = None) -> dict:
     # .env 里的密钥只兜底给站长（最早注册的账号）。非站长这里就当作"什么都没有"，
     # 界面显示黄点 +「还没填密钥」，逼他自带密钥 —— 站是站长掏钱开的，不该被白用。
     is_owner = db.is_owner(user["id"])
-    return {"config": modelcfg.mask_config(cfg, reveal=True, allow_env=is_owner),
+    web_entry, web_hint = modelcfg.search_entry(user["id"])
+    from station.modelcatalog import upgrade
+    return {"config": modelcfg.mask_config(upgrade(cfg), reveal=True, allow_env=is_owner),
+            "web_search_status": {"available": web_entry is not None, "hint": web_hint},
             "slots": modelcfg.slots_view(),
             "presets": modelcfg.presets(),      # 「＋ 添加模型来源」的一键模板
             # 界面据此选引导文案：站长"不改也能用"，别人"先去填密钥"。
@@ -276,8 +288,10 @@ def put_model_config(body: ModelConfigIn, request: Request):
     u = require_user(request)
     from station import modelcfg
     try:
-        cfg = modelcfg.save_config(u["id"], {"providers": body.providers,
-                                             "slots": body.slots})
+        incoming = {"providers": body.providers, "slots": body.slots}
+        if "web_search" in body.model_fields_set:
+            incoming["web_search"] = body.web_search
+        cfg = modelcfg.save_config(u["id"], incoming)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _cfg_payload(u, cfg)
@@ -348,17 +362,25 @@ def test_model_config(body: ProviderTestIn, request: Request):
       两趟都还是 max_tokens=1 + 8 秒超时，成本可以忽略。
     """
     u = require_user(request)
+    if body.model_id and "~" in body.provider_id:
+        raise HTTPException(400, "请分别提供来源标识和模型标识")
     if not _test_allowed(u["id"]):
         raise HTTPException(429, "测试过于频繁，请稍后重试")
     from station import modelcfg
     try:
-        url, key, model, hit_slot, effort = modelcfg.probe_entry(
-            u["id"], body.provider_id, body.slot)
+        if body.model_id:
+            url, key, model, hit_slot, effort = modelcfg.probe_entry(
+                u["id"], body.provider_id, body.slot, body.model_id)
+        else:
+            url, key, model, hit_slot, effort = modelcfg.probe_entry(
+                u["id"], body.provider_id, body.slot)
     except ValueError as e:
         raise HTTPException(400, str(e))
     decision_entry = None
     if hit_slot == "route":
-        entries = modelcfg.resolve_one(u["id"], body.provider_id, "route")
+        from station.modelcatalog import reference
+        ref = reference(body.provider_id, body.model_id) if body.model_id else body.provider_id
+        entries = modelcfg.resolve_one(u["id"], ref, "route")
         if entries and entries[0].get("route_protocol") == "systemone":
             decision_entry = entries[0]
             # Validate the exact snapshot sent below, even if configuration changed
@@ -413,7 +435,16 @@ def test_model_config(body: ProviderTestIn, request: Request):
             llm = ChatOpenAI(model=model, api_key=key, base_url=url or None,
                              temperature=0, timeout=8, max_retries=0, max_tokens=1,
                              **reasoning_kwargs(ChatOpenAI, eff))
-            llm.invoke([{"role": "user", "content": "hi"}])
+            content = "hi"
+            if hit_slot == "vision":
+                import base64
+                import io
+                from PIL import Image
+                stream = io.BytesIO()
+                Image.new("RGB", (128, 128), "red").save(stream, format="PNG")
+                content = [{"type": "text", "text": "看图回答一个字"},
+                           {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(stream.getvalue()).decode()}}]
+            llm.invoke([{"role": "user", "content": content}])
 
         _try("")                                   # 第一趟：地址/密钥/模型名对不对
         out = {"ok": True, "ms": int((time.perf_counter() - t0) * 1000)}
@@ -438,6 +469,26 @@ def test_model_config(body: ProviderTestIn, request: Request):
 
 
 # ── MCP 服务（每人一份：用户自己配的远端 MCP；内置的写死在代码里）─────────
+@app.post("/api/websearch/test")
+def test_web_search(request: Request):
+    """The explicit UI probe makes one search using this user's saved credentials."""
+    user = require_user(request)
+    if not _test_allowed(user["id"]):
+        raise HTTPException(429, "测试过于频繁，请稍后重试")
+    from station.search import service
+    from station.search.client import SearchError
+    tick = time.monotonic()
+    try:
+        result = service.search(Context(user_id=user["id"]), "DeepSeek 官方文档", 1)
+        return {"ok": True, "results": result["results"], "cache_hit": result["cache_hit"],
+                "ms": round((time.monotonic()-tick)*1000, 1)}
+    except SearchError as exc:
+        return {"ok": False, "error": exc.code, "hint": exc.message,
+                "ms": round((time.monotonic()-tick)*1000, 1)}
+    except Exception:
+        return {"ok": False, "error": "internal_error", "hint": "网页检索暂时不可用"}
+
+
 # 为什么有这一组：把外部 MCP server 的工具接进对话（见 station/mcp/）。
 # ★ 注意"用户能配什么"：**只允许 http / sse 两种传输，配不了 stdio**。stdio 意味着
 #   在服务器上起进程，而这个站公网可达 —— 放开它等于给任意注册用户一个 RCE 端点。
@@ -796,6 +847,25 @@ def sessions(request: Request, skill: str = ""):
     return {"sessions": db.thread_list(u["id"], skill or None)}
 
 
+@app.get("/api/traces/{trace_id}")
+def trace_detail(trace_id: str, request: Request):
+    from station.observability.service import detail
+    u = require_user(request)
+    value = detail(trace_id, u["id"])
+    if value is None:
+        raise HTTPException(404, "执行记录不存在")
+    return value
+
+
+@app.get("/api/sessions/{tid}/traces")
+def session_traces(tid: str, request: Request):
+    u = require_user(request)
+    thread = Thread.load(tid)
+    if thread is None or thread.user_id != u["id"]:
+        raise HTTPException(404, "会话不存在")
+    return {"traces": db.trace_list(tid, u["id"])}
+
+
 @app.get("/api/sessions/{tid}")
 def session_detail(tid: str, request: Request):
     """看某个会话的完整消息（只能看自己的）。"""
@@ -848,7 +918,7 @@ def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
                     "labels": [_tool_label(str(c.get("name")), user_id) for c in calls],
                     "args": [c.get("arguments") or {} for c in calls]}})
         elif role in ("user", "assistant") and content:
-            items.append({"role": role, "content": content})
+            items.append({"role": role, "content": content, **({"trace_id": m["trace_id"]} if m.get("trace_id") else {})})
             if role == "user" and m.get("attachment_turn_id"):
                 items.append({"role": "render", "content": "", "card": {
                     "type": "attachments", "turn_id": m["attachment_turn_id"]}})
@@ -910,6 +980,7 @@ async def chat(body: ChatIn, request: Request):
     # gen() 是嵌套【生成器】：调用 chat() 只返回一个 StreamingResponse，
     # 只有当框架真正去读这个流时，gen() 里的代码才会逐行执行到每个 yield。
     agent_execution_id = uuid.uuid4().hex
+    trace_state = {"trace": None, "request": None, "request_step": None, "state": "interrupted"}
     def gen():
         t_start = time.perf_counter()          # 分段计时用（见末尾的 timing 日志）
         user = None
@@ -947,6 +1018,33 @@ async def chat(body: ChatIn, request: Request):
             thread.user_id = user["id"]
         else:
             thread.skill_id = "station"            # 旧模块会话也并入统一主对话
+        # 一条附件消息的提交/恢复共用 trace；HTTP 请求本身有独立 request span。
+        trace_key = ("attachment:" + attachment_turn["client_key"] if attachment_turn else
+                     "attachment:" + body.client_turn_id if body.attachment_ids and body.client_turn_id else "")
+        origin = (thread.pending or {}).get("trace_id", "")
+        trace = obs.begin(user["id"], thread.id, key=trace_key, origin=origin,
+                          attributes={"message_hash": obs.fingerprint(body.message),
+                                      "message_chars": len(body.message),
+                                      "attachment_ids": attachment_turn["attachment_ids"] if attachment_turn else body.attachment_ids})
+        trace_state["trace"] = trace
+        if trace:
+            before_trace = time.perf_counter() - t_start
+            trace.started = time.monotonic() - before_trace
+            trace.record['created'] = min(trace.record['created'], time.time()-before_trace)
+            trace.save()
+            obs.bind(trace)
+            request_span = obs.span("request", "恢复回答" if attachment_turn else "接收消息",
+                                    resume=bool(attachment_turn), retry=body.retry_agent)
+            trace_state["request_step"] = request_span.__enter__()
+            trace_state["request"] = request_span
+            if attachment_turn:
+                trace.record['attributes'].update(attachment_turn_id=attachment_turn['id'],
+                                                   run_refs=attachment_turn.get('run_refs', {}))
+                trace.save()
+                for message in thread.msgs:
+                    if message.get("attachment_turn_id") == attachment_turn["id"]:
+                        message["trace_id"] = trace.record["id"]
+            yield _sse({"type": "trace", "trace_id": trace.record["id"], "thread_id": thread.id})
         if body.attachment_ids and not attachment_turn:
             from station.documents import service as documents
             if thread.pending:
@@ -959,6 +1057,9 @@ async def chat(body: ChatIn, request: Request):
                 yield _sse({"type": "error", "text": str(e)})
                 return
             card = {"type": "attachments", "turn_id": turn["id"], "thread_id": thread.id}
+            if trace:
+                trace.record['attributes']['attachment_turn_id'] = turn['id']
+                trace.save()
             if created:
                 _remember_card(thread, card)
                 thread.save()
@@ -977,6 +1078,9 @@ async def chat(body: ChatIn, request: Request):
                                                 {"state": "running_agent", "error": "", "agent_boot_id": BOOT_ID,
                                                  "agent_claim_id": agent_execution_id}, expected=allowed)
             if not claimed:
+                trace_state["state"] = "skipped"
+                if trace_state["request_step"]:
+                    trace_state["request_step"].record["state"] = "skipped"
                 yield _sse({"type": "meta", "thread_id": thread.id})
                 yield _sse({"type": "done"})
                 return
@@ -1032,9 +1136,12 @@ async def chat(body: ChatIn, request: Request):
         route_ms = 0.0
         if agent is None:
             t_route = time.perf_counter()
-            route = l1_route(body.message, available)
-            if route is None:
-                route = l2_route(body.message, catalog, diag, user["id"])
+            with obs.span("route", "意图识别") as route_step:
+                route = l1_route(body.message, available)
+                if route is None:
+                    route = l2_route(body.message, catalog, diag, user["id"])
+                route_step.update(level=route.level if route else "fallback",
+                                  skill=route.skill_id if route else "", reason=diag.get("reason", ""))
             route_ms = round((time.perf_counter() - t_route) * 1000, 1)
 
         # 确定“这次真正用哪个 agent”：
@@ -1056,6 +1163,9 @@ async def chat(body: ChatIn, request: Request):
                 agent = generic                    # L2 明说是 chat，不进业务技能
             else:
                 agent = get_skill(active) if active in available else generic
+        if trace:
+            trace.record['attributes']['agent'] = agent.id
+            trace.save()
         if ctx is None:
             ctx = _ctx(thread, agent)
             ctx.system = (agent.system or "").strip()
@@ -1120,8 +1230,22 @@ async def chat(body: ChatIn, request: Request):
     # StreamingResponse(生成器) 是 FastAPI 的“边生产边发送”响应体
     def guarded_gen():
         try:
-            yield from gen()
+            for packet in gen():
+                event = json.loads(packet.removeprefix("data: ").strip())
+                if event.get("type") == "error":
+                    trace_state["state"] = "error"
+                elif event.get("type") == "attachment_wait":
+                    trace_state["state"] = "waiting_parse"
+                elif event.get("type") == "approval_request":
+                    trace_state["state"] = "waiting_approval"
+                elif event.get("type") == "delta":
+                    obs.first_text()
+                elif event.get("type") == "done" and trace_state["state"] == "interrupted":
+                    trace_state["state"] = "success"
+                yield packet
         except Exception as e:
+            trace_state["state"] = "error"
+            obs.fail(type(e).__name__)
             if body.resume_turn_id:
                 user = current_user(request)
                 current = db.attachment_turn_get(body.resume_turn_id, user["id"]) if user else None
@@ -1132,6 +1256,14 @@ async def chat(body: ChatIn, request: Request):
             log_route({"kind": "chat_error", "error_type": type(e).__name__})
             yield _sse({"type": "error", "text": "请求处理失败，请重新载入会话查看附件状态"})
         finally:
+            cm = trace_state["request"]
+            if cm:
+                if trace_state["state"] in ("error", "interrupted"):
+                    obs.fail("RequestInterrupted" if trace_state["state"] == "interrupted" else "RequestError")
+                    if trace_state["state"] == "interrupted":
+                        trace_state["request_step"].record["state"] = "interrupted"
+                cm.__exit__(None, None, None)
+            obs.finish(trace_state["trace"], trace_state["state"])
             # 断网/浏览器取消不能留下永远 running 的轮次；外部工具不自动重放。
             if body.resume_turn_id:
                 user = current_user(request)
@@ -1140,7 +1272,23 @@ async def chat(body: ChatIn, request: Request):
                     db.attachment_turn_update(body.resume_turn_id, user["id"],
                                               {"state": "interrupted", "error": "对话连接中断，请明确重试"},
                                               expected=("running_agent",))
-    return StreamingResponse(guarded_gen(), media_type="text/event-stream")
+    async def traced_stream():
+        # Starlette 的同步流可能跨 worker 取 next。显式关闭迭代器，确保断连也执行 finally；
+        # 已执行的外部操作不会被追踪模块取消或重放。
+        from starlette.concurrency import run_in_threadpool
+        import anyio
+        iterator = obs.isolated_stream(guarded_gen())
+        sentinel = object()
+        try:
+            while True:
+                packet = await run_in_threadpool(next, iterator, sentinel)
+                if packet is sentinel:
+                    return
+                yield packet
+        finally:
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(iterator.close)
+    return StreamingResponse(traced_stream(), media_type="text/event-stream")
 
 
 # ── pipeline 型：异步任务 ──────────────────────────────────────

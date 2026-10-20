@@ -1,7 +1,7 @@
 """全局工具（station/tools/）的离线单测 —— 不联网、不烧 key、不碰真数据。
 
-新手视角（Java 朋友版）：这一组只覆盖 09-13 精简后**剩下的 4 个**全局工具
-（记长期记忆 / 查产物 / 报能力），外加一条"**别把文件工具加回来**"的回归护栏。
+新手视角（Java 朋友版）：本组覆盖 4 个 station 基础工具（记忆/产物/能力）及全局装配；
+2 个可配置 web 工具的 HTTP、凭据和预算测试见 test_web_search.py。保留文件工具禁入护栏。
 
 ★ 09-13 删掉的东西，测试也跟着删了（连同它们守的那批用例）：
   · `ls` / `read` / `grep` / `write`（原来的 tools/fs.py）
@@ -119,9 +119,9 @@ def test_global_tools_are_namespaced_and_unique():
     from station.tools import GLOBAL_TOOLS
     names = [t.name for t in GLOBAL_TOOLS]
     assert len(names) == len(set(names))
-    assert all(n.startswith("station.") for n in names)
+    assert all(n.startswith(("station.", "web.")) for n in names)
     assert names == ["station.remember", "station.recall",
-                     "station.skills", "station.artifacts"]
+                     "station.skills", "station.artifacts", "web.search", "web.fetch"]
 
 
 def test_no_file_tools_come_back():
@@ -174,7 +174,7 @@ def test_tools_for_merges_without_duplicates():
 
     generic = build_generic_agent()
     merged = tools_for(generic)
-    assert [t.name for t in merged] == [t.name for t in GLOBAL_TOOLS]
+    assert [t.name for t in merged] == [t.name for t in GLOBAL_TOOLS if t.owner != "web"]
 
     # ★ 挑被重复的那个名字**按 GLOBAL_TOOLS 实际的第一项**来，别写死一个字面量 ——
     #   写死的话哪天全局工具顺序一变（09-13 就变过），断言会指向一个根本没被重复的

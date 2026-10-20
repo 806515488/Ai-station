@@ -269,6 +269,21 @@ def _document_schema() -> tuple[str, ...]:
     )
 
 
+def _trace_schema() -> tuple[str, ...]:
+    """执行追踪只存有界元数据；正文仍属于会话/产物，不复制进追踪表。"""
+    return (
+        "CREATE TABLE IF NOT EXISTS station_traces("
+        "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, thread_id TEXT NOT NULL, "
+        "correlation_key TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, "
+        "updated DOUBLE PRECISION NOT NULL, record TEXT NOT NULL, UNIQUE(user_id,correlation_key))",
+        "CREATE TABLE IF NOT EXISTS station_trace_spans("
+        "id TEXT PRIMARY KEY, trace_id TEXT NOT NULL REFERENCES station_traces(id) ON DELETE CASCADE, "
+        "created DOUBLE PRECISION NOT NULL, record TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_traces_thread ON station_traces(user_id,thread_id,created)",
+        "CREATE INDEX IF NOT EXISTS idx_trace_spans_trace ON station_trace_spans(trace_id,created)",
+    )
+
+
 def _postgres_schema() -> tuple[str, ...]:
     """PostgreSQL 的初始 DDL（新库首次启动自动建表，幂等）。
 
@@ -315,7 +330,7 @@ def _postgres_schema() -> tuple[str, ...]:
         "CREATE INDEX IF NOT EXISTS idx_ck_project ON checkpoints(project, id)",
         "CREATE INDEX IF NOT EXISTS idx_ref_expires ON ref_links(expires)",
     )
-    return core + _interview_schema() + _document_schema()
+    return core + _interview_schema() + _document_schema() + _trace_schema()
 
 
 _PG_SCHEMA_LOCK = 741_267_945
@@ -324,7 +339,8 @@ _PG_CORE_TABLES = {"users", "threads", "jobs", "archive_states", "corrections", 
 _PG_INTERVIEW_TABLES = {"interviews", "interview_recordings", "interview_questions",
                         "interview_question_spans", "interview_reviews", "interview_actions"}
 _PG_DOCUMENT_TABLES = {"station_documents", "station_attachment_turns"}
-_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES
+_PG_TRACE_TABLES = {"station_traces", "station_trace_spans"}
+_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES
 
 
 def _postgres_schema_state(c: _PostgresConnection) -> str:
@@ -335,7 +351,8 @@ def _postgres_schema_state(c: _PostgresConnection) -> str:
         "('users','threads','jobs','archive_states','corrections','checkpoints',"
         "'model_configs','mcp_servers','ref_links','interviews','interview_recordings',"
         "'interview_questions','interview_question_spans','interview_reviews',"
-        "'interview_actions','station_documents','station_attachment_turns')").fetchall()
+        "'interview_actions','station_documents','station_attachment_turns',"
+        "'station_traces','station_trace_spans')").fetchall()
     tables = {row["table_name"] for row in rows}
     if not tables:
         return "empty"
@@ -346,7 +363,7 @@ def _postgres_schema_state(c: _PostgresConnection) -> str:
         "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name='users' AND column_name='seq') "
         "AS present").fetchone()["present"]
-    required = _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES
+    required = _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES
     return "current" if has_seq and required.issubset(tables) else "upgrade-needed"
 
 
@@ -378,7 +395,7 @@ def upgrade_postgres_schema(c: _PostgresConnection) -> str:
                 "UPDATE users SET seq=ordered.seq FROM ("
                 "SELECT id, ROW_NUMBER() OVER (ORDER BY created ASC, id ASC) AS seq FROM users"
                 ") AS ordered WHERE users.id=ordered.id AND users.seq=0")
-        for statement in _interview_schema() + _document_schema():
+        for statement in _interview_schema() + _document_schema() + _trace_schema():
             c.execute(statement)
         return "upgraded"
 
@@ -575,7 +592,7 @@ def init_db(c: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_reviews_question_version ON interview_reviews(question_id, version DESC);
     CREATE INDEX IF NOT EXISTS idx_actions_interview_status_updated ON interview_actions(interview_id, status, updated DESC);
     """)
-    for statement in _document_schema():
+    for statement in _document_schema() + _trace_schema():
         c.execute(statement)
     _migrate(c)
     c.commit()
@@ -852,6 +869,102 @@ def attachment_turn_list(user_id: str = "", thread_id: str = "") -> list[dict]:
                               (" WHERE " + " AND ".join(where) if where else "") +
                               " ORDER BY created DESC LIMIT 1000", tuple(args)).fetchall()
         return [json.loads(row["record"]) for row in rows]
+
+
+def trace_create(record: dict, key: str = "") -> dict:
+    """关联键由服务端构造；恢复复用同一档案，重复提交不创建第二份追踪。"""
+    with _lock:
+        c = conn()
+        # 默认保存 30 天、每用户最多 1000 条。仅清理追踪，不动会话和产物。
+        expired = c.execute("SELECT id FROM station_traces WHERE user_id=? AND updated<?",
+                            (record['user_id'],_now()-30*86400)).fetchall()
+        overflow = c.execute("SELECT id FROM station_traces WHERE user_id=? ORDER BY created DESC "
+                             "LIMIT 10000 OFFSET 999",(record['user_id'],)).fetchall()
+        for row in [*expired,*overflow]:
+            c.execute("DELETE FROM station_trace_spans WHERE trace_id=?",(row['id'],))
+            c.execute("DELETE FROM station_traces WHERE id=? AND user_id=?",(row['id'],record['user_id']))
+        key = key or record['id']
+        c.execute("INSERT INTO station_traces(id,user_id,thread_id,correlation_key,created,updated,record) "
+                  "VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,correlation_key) DO NOTHING",
+                  (record['id'],record['user_id'],record['thread_id'],key,record['created'],record['updated'],
+                   json.dumps(record,ensure_ascii=False)))
+        c.commit()
+        row = c.execute("SELECT record FROM station_traces WHERE user_id=? AND correlation_key=?",
+                        (record['user_id'],key)).fetchone()
+        return json.loads(row['record'])
+
+
+def trace_save(record: dict) -> dict:
+    with _lock:
+        previous = trace_get(record['id'], record['user_id'])
+        if previous:
+            record = {**record, 'state': previous['state'], 'active_ms': previous.get('active_ms', 0),
+                      'attributes': {**previous.get('attributes', {}), **record.get('attributes', {})}}
+        conn().execute("UPDATE station_traces SET updated=?,record=? WHERE id=? AND user_id=?",
+                       (record['updated'],json.dumps(record,ensure_ascii=False),record['id'],record['user_id']))
+        conn().commit()
+        return record
+
+
+def trace_finish(trace_id: str, user_id: str, state: str, duration: float, incomplete: bool) -> dict | None:
+    """同一附件的并发恢复可能只执行一次；累计时间原子合并，跳过请求不能覆盖获胜者状态。"""
+    with _lock:
+        record = trace_get(trace_id, user_id)
+        if not record:
+            return None
+        record.update(updated=_now(), active_ms=round(record.get('active_ms',0)+duration,2),
+                      incomplete=bool(record.get('incomplete') or incomplete))
+        if state != 'skipped':
+            record['state'] = state
+        conn().execute("UPDATE station_traces SET updated=?,record=? WHERE id=? AND user_id=?",
+                       (record['updated'],json.dumps(record,ensure_ascii=False),trace_id,user_id))
+        conn().commit()
+        return record
+
+
+def trace_span_save(record: dict) -> None:
+    with _lock:
+        result = conn().execute("INSERT INTO station_trace_spans(id,trace_id,created,record) SELECT ?,?,?,? "
+                                "WHERE EXISTS(SELECT 1 FROM station_trace_spans WHERE id=?) OR "
+                                "(SELECT COUNT(*) FROM station_trace_spans WHERE trace_id=?) < 400 "
+                                "ON CONFLICT(id) DO UPDATE SET record=excluded.record",
+                                (record['id'],record['trace_id'],record['created'],json.dumps(record,ensure_ascii=False),
+                                 record['id'],record['trace_id']))
+        if not result.rowcount:
+            raise RuntimeError("trace span limit")
+        conn().commit()
+
+
+def trace_get(trace_id: str, user_id: str) -> dict | None:
+    with _lock:
+        row = conn().execute("SELECT record FROM station_traces WHERE id=? AND user_id=?",
+                             (trace_id,user_id)).fetchone()
+        return json.loads(row['record']) if row else None
+
+
+def trace_spans(trace_id: str, user_id: str) -> list[dict]:
+    with _lock:
+        rows = conn().execute("SELECT s.record FROM station_trace_spans s JOIN station_traces t ON s.trace_id=t.id "
+                              "WHERE t.id=? AND t.user_id=? ORDER BY s.created,s.id LIMIT 1000",
+                              (trace_id,user_id)).fetchall()
+        return [json.loads(r['record']) for r in rows]
+
+
+def trace_list(thread_id: str, user_id: str) -> list[dict]:
+    with _lock:
+        rows = conn().execute("SELECT record FROM station_traces WHERE thread_id=? AND user_id=? "
+                              "ORDER BY created DESC LIMIT 100",(thread_id,user_id)).fetchall()
+        return [json.loads(r['record']) for r in rows]
+
+
+def trace_children(trace_id: str, user_id: str) -> list[dict]:
+    with _lock:
+        row = conn().execute("SELECT thread_id FROM station_traces WHERE id=? AND user_id=?",(trace_id,user_id)).fetchone()
+        if not row:
+            return []
+        rows = conn().execute("SELECT record FROM station_traces WHERE thread_id=? AND user_id=? "
+                              "ORDER BY created DESC LIMIT 1000", (row['thread_id'],user_id)).fetchall()
+        return [record for row in rows if (record := json.loads(row['record'])).get('origin_trace_id') == trace_id]
 
 
 # ── Thread（会话）──────────────────────────────────────────────────

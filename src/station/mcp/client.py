@@ -123,7 +123,9 @@ def _run(coro, timeout: float):
     转发口，别把同一个 coro 传两次。
     """
     loop = _ensure_loop()
-    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    import contextvars
+    # 显式复制调用者工牌，确保异步会话中的连接/握手步骤关联原来的工具调用。
+    fut = contextvars.copy_context().run(asyncio.run_coroutine_threadsafe, coro, loop)
     try:
         return fut.result(timeout)
     except concurrent.futures.TimeoutError:
@@ -201,11 +203,16 @@ async def _connect(spec: ServerSpec):
 
 
 async def _with_session(spec: ServerSpec, fn):
-    """连上 → 握手 → 把 session 交给 fn 用 → 收工。三个动作绑在一起，别处不用重复。"""
+    """连接、握手、调用分别计时；SDK 的关闭仍由异步上下文管理器负责。"""
+    from contextlib import AsyncExitStack
+    from station import observability as obs
     from mcp.client.session import ClientSession
-    async with _connect(spec) as (read, write):
+    async with AsyncExitStack() as stack:
+        with obs.span("mcp_connect", "连接 MCP", server=spec.id, transport=spec.transport):
+            read, write = await stack.enter_async_context(_connect(spec))
         async with ClientSession(read, write) as session:
-            await session.initialize()        # ★ 必须显式握手，SDK 不会替你做
+            with obs.span("mcp_handshake", "MCP 握手", server=spec.id):
+                await session.initialize()
             return await fn(session)
 
 
@@ -429,7 +436,12 @@ def call_tool(spec: ServerSpec, name: str, args: dict | None = None,
     失败一律抛 `McpError`（含超时的 `McpTimeout`）—— 由调用方决定怎么讲给用户听。
     """
     async def _do(session):
-        return await session.call_tool(name, args or {})
+        from station import observability as obs
+        with obs.span("mcp_call", "执行 MCP 工具", server=spec.id, tool=name) as step:
+            result = await session.call_tool(name, args or {})
+            if getattr(result, "isError", False):
+                step.error("McpToolError")
+            return result
 
     res = _run(_with_session(spec, _do), timeout or DEFAULT_TIMEOUT)
 

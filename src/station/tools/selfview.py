@@ -31,6 +31,9 @@ def t_skills(ctx) -> str:
             lines.append(f"  常用说法：{c.hints}")
     lines.append("")
     lines.append("此外我随时可以：记长期记忆（remember/recall）、列产物（artifacts）。")
+    from station.tools import web
+    if web.available(getattr(ctx, "user_id", "")):
+        lines.append("已配置网页检索：可以使用 web.search 搜索及 web.fetch 读取网页，按当前工具表调用。")
     # ★★ 这一句是给"模型发现自己手上没有那个工具"时的出路 —— 按本仓规矩，
     #    "我做不到什么"要写进**返回值**里（模型每轮读的是返回值，不是岗位须知）。
     #    09-14 实测：一条视频线程被误路由进档案技能后，模型知道该用 video.ask_photo

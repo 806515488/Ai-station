@@ -143,6 +143,10 @@ def builtin_specs() -> list[ServerSpec]:
     """把内置表翻译成 ServerSpec 列表（每次现建，免得调用方改到共享对象上）。"""
     out = []
     for s in BUILTIN_SERVERS:
+        # Retain the old implementation for explicit operator rollback, not as a
+        # duplicate/default search tool. User-defined MCP services are unchanged.
+        if s["id"] == "websearch" and os.environ.get("STATION_LEGACY_SEARCH_MCP") != "1":
+            continue
         out.append(ServerSpec(id=s["id"], label=s.get("label", s["id"]),
                               transport=s.get("transport", "stdio"),
                               command=list(s.get("command") or []),

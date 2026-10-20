@@ -1,6 +1,8 @@
 """Intent-only protocol dispatch and fallback, under one wall-clock budget."""
 from __future__ import annotations
 
+from station import observability as obs
+
 import json
 import math
 import re
@@ -88,6 +90,8 @@ def identify(text: str, catalog: list, entries: list, *, threshold: float,
         attempt = {"provider": entry.get("id", ""), "model": entry.get("model", ""),
                    "protocol": protocol}
         tick = time.monotonic()
+        attempt_cm = obs.span("route_attempt", "意图模型尝试", **obs.model_info(entry))
+        attempt_step = attempt_cm.__enter__()
         try:
             override = entry.get("route_threshold")
             gate = float(override) if override not in (None, "") else (0.8 if protocol == "systemone" else threshold)
@@ -123,6 +127,10 @@ def identify(text: str, catalog: list, entries: list, *, threshold: float,
             if isinstance(exc, systemone.SystemOneHTTPError):
                 attempt["status_code"] = exc.status_code
         attempt["ms"] = round((time.monotonic() - tick) * 1000, 1)
+        attempt_step.update(**attempt)
+        if attempt["reason"] == "timeout" or attempt["reason"].startswith("error:"):
+            attempt_step.error(attempt["reason"])
+        attempt_cm.__exit__(None, None, None)
         attempts.append(attempt)
         final = {**attempt, "attempts": attempts}
         if attempt["reason"] in ("hit", "chat"):

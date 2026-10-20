@@ -609,7 +609,7 @@ def test_index_html_exposes_speech_slot_and_field():
            ).read_text(encoding="utf-8")
     assert 'speech:"speech_model"' in src
     assert "speech_model:p.speech_model" in src
-    assert "'语音识别模型'" in src
+    assert "speech:'语音识别'" in src
 
 
 # ── ⑨ 推理强度（09-20）：只挂通用模型、默认填好、脏值拦下 ──────────────

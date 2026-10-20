@@ -121,6 +121,13 @@ class JobManager:
         if job_id:
             job.id = job_id                 # 宿主先持久化附件轮次引用，再启动 worker，避免抢跑
         job.user_id = user_id or ""
+        from station import observability as obs
+        origin = obs.current()
+        if origin and origin.record["user_id"] == job.user_id:
+            job.result = {"_trace_origin": {"trace_id": origin.record["id"],
+                                           "thread_id": origin.record["thread_id"]}}
+            with obs.span("job_submit", "提交后台任务", job_id=job.id, skill=skill.id):
+                pass
         job._persist()                          # 先落库，保证没跑就有档案
         with self._lock:
             self._active[job.id] = job          # 放进“运行中”表
@@ -129,6 +136,30 @@ class JobManager:
         return job
 
     def _run(self, job: Job, skill):
+        from station import observability as obs
+        try:
+            origin = (job.result or {}).get("_trace_origin")
+            if not origin:
+                return self._run_impl(job, skill)
+            trace = obs.begin(job.user_id, origin["thread_id"], kind="job", key="job:"+job.id,
+                              origin=origin["trace_id"], attributes={"job_id":job.id,"skill":skill.id})
+            with obs.activate(trace):
+                try:
+                    with obs.span("job", "后台任务", job_id=job.id, skill=skill.id) as step:
+                        self._run_impl(job, skill)
+                        step.update(artifacts=list(job.artifacts))
+                        if job.status == "failed":
+                            step.error("JobFailed")
+                    obs.finish(trace, "error" if job.status == "failed" else "success")
+                except BaseException:
+                    obs.finish(trace, "interrupted")
+                    raise
+        finally:
+            # 追踪收尾也完成后再移出 active，避免恢复/测试切库时还有尾部写入。
+            with self._lock:
+                self._active.pop(job.id, None)
+
+    def _run_impl(self, job: Job, skill):
         """worker 线程的主方法：喂着 skill.build_runner 生成器跑，直到结束/抛错。"""
         # 给这次任务也造一个 Context（技能有独立数据目录 + key 白名单 + 归属用户）
         ctx = Context(skill_id=skill.id,
@@ -162,7 +193,10 @@ class JobManager:
                 #   而前端进度面板显示的就是这个 message。
                 job.update(status="running", message="start")
                 gate = contextlib.nullcontext()   # 空闸：with 里什么都不做
-            with gate:
+            from station import observability as obs
+            with obs.span("queue", "等待任务执行名额"):
+                gate.__enter__()
+            try:
                 # build_runner(ctx, **job.args) 返回生成器；**展开把 args dict 变关键字参数
                 gen = skill.build_runner(ctx, **job.args)
                 if gen is None:                 # 防御：技能没给生成器
@@ -170,14 +204,13 @@ class JobManager:
                 for ev in gen:                  # 逐个取生成器吐的事件
                     if isinstance(ev, dict):    # 只认 dict 事件（progress/artifact/log…）
                         job.append(ev)          # 每收到一个就更新 job + 落盘
+            finally:
+                gate.__exit__(None, None, None)
             job.update(status="done", message="完成")   # 生成器自然走完 = 成功
         except Exception as e:                          # noqa  # 任何异常 = 失败
             job.update(status="failed", message=f"{type(e).__name__}: {e}")
             # 把完整堆栈存进 log，排查问题用（message 只给一句话人话）
             job.append({"type": "log", "level": "error", "text": traceback.format_exc()})
-        finally:
-            with self._lock:                    # 无论成败，跑完就从“运行中”表移除
-                self._active.pop(job.id, None)
 
     def get(self, job_id: str) -> dict | None:
         """查任务状态。正在跑看内存表，跑完了/重启过就从磁盘 load。"""

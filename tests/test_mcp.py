@@ -24,6 +24,11 @@ _SRC = _REPO / "src"
 
 # ── 夹具 ──────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def legacy_search_opt_in(monkeypatch):
+    """Keep the legacy transport regression; native-search tests cover default-off."""
+    monkeypatch.setenv("STATION_LEGACY_SEARCH_MCP", "1")
+
 @pytest.fixture
 def fake(monkeypatch):
     """让内置 server 跑在测试模式（子进程会继承这个环境变量，见 client._stdio_env）。"""

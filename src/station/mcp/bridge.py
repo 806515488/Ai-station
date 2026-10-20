@@ -76,6 +76,8 @@ def _make_runner(server_id: str, tool_name: str):
         except Exception as e:                 # noqa：任何失败都讲成人话回给模型
             # ★ 不抛异常：抛出去会被 core/agent 吞成一句"工具执行出错: …"，
             #   模型看不出下一步该怎么办；这里给一句能行动的话。
+            from station import observability as obs
+            obs.fail(type(e).__name__)
             return f"调用 MCP 工具 {_tn} 失败：{mcli.explain(e)}"
     return _run
 

@@ -236,7 +236,12 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
     from archive.service.interactive import (
         invalidate_state, load_state, set_active)
     # 这一趟会落在哪个 channel：指定了就是那家，没指定就是识图链的链首
-    ch = provider or _vision_chain_label(ctx)
+    if provider:
+        from station import modelcfg
+        entries = modelcfg.resolve_one(_owner(ctx), provider, "vision")
+        ch = modelcfg.chain_label(entries) if entries else provider
+    else:
+        ch = _vision_chain_label(ctx)
     st = load_state(pj, ch) if ch else load_state(pj)
     if st and (st.get("materials") or []) and not refresh:
         if provider:
@@ -321,14 +326,15 @@ def _vision_menu(ctx, pj: str) -> tuple[list[dict], str]:
     cur = active_channel(pj)
     rows, total = [], 0
     for p in provs:
-        got, total = cache_coverage(pj, p["id"])
-        if p["id"] in done:
+        channel = modelcfg.chain_label(modelcfg.resolve_one(_owner(ctx), p["id"], "vision"))
+        got, total = cache_coverage(pj, channel)
+        if channel in done:
             state = f"已识别过（{total} 页）"
         elif got:
             state = f"缓存里有 {got}/{total} 页（没跑过完整识别）"
         else:
             state = f"没读过（{total} 页要读一遍）"
-        if p["id"] == cur:
+        if channel == cur:
             tail = "  ← 当前展示"
         elif p["in_chain"]:
             tail = "  （在识图链里，默认会用它）" if p is provs[0] else "  （在识图链里）"
@@ -367,11 +373,14 @@ def t_use_model(ctx, provider: str) -> dict | str:
     if not pj:
         return "还没有正在整理的档案卷，先发照片建卷。"
     from archive.service.interactive import channels, set_active
+    from station import modelcfg
+    entries = modelcfg.resolve_one(_owner(ctx), provider, "vision")
+    channel = modelcfg.chain_label(entries) if entries else provider
     chans = {c["channel"] for c in channels(pj)}
-    if provider not in chans:
+    if channel not in chans:
         return (f"「{provider}」还没读过这卷，没有它的结果可看。"
                 f"要我读一遍吗？说“用 {provider} 重新识别”就行。")
-    set_active(pj, provider)
+    set_active(pj, channel)
     out = t_show_overview(ctx)
     out["text"] = f"已切到「{provider}」读的结果（没有重新读，不花钱）。"
     return out

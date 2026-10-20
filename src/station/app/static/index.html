@@ -226,17 +226,59 @@
   #attachmentDrafts:not(:empty){padding-top:8px;padding-bottom:8px}
   .attachment-draft{border:1px solid var(--line);border-radius:6px;padding:3px 7px;color:var(--dim)}
   .document-card .document-rows{white-space:normal;font-size:13px}
-  .document-tree{padding:8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-  .document-tree details{padding-left:10px;margin:5px 0}
-  .document-tree summary{cursor:pointer;color:var(--fg)}
-  .document-tree a{display:block;color:var(--acc);padding:2px 0}
+  .document-tree{margin:0 0 16px;border:1px solid var(--line);border-radius:12px;
+                 background:var(--panel2);overflow:hidden;font-size:13px}
+  .document-tree summary{cursor:pointer;list-style:none}
+  .document-tree summary::-webkit-details-marker{display:none}
+  .document-tree summary:focus-visible{outline:2px solid var(--acc);outline-offset:-3px;border-radius:7px}
+  .dt-root-head{display:flex;align-items:center;gap:10px;padding:13px 12px}
+  .dt-root-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;
+                 background:rgba(76,141,255,.12);color:var(--acc);border-radius:9px}
+  .dt-root-icon svg{width:19px;height:19px}
+  .dt-root-title{flex:1;min-width:0}.dt-root-title b{display:block;font-size:14px}
+  .dt-root-title small{display:block;font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+  .dt-count{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .dt-chevron{flex:none;width:14px;height:14px;color:var(--dim);transition:transform .15s}
+  details[open]>.dt-root-head>.dt-chevron,details[open]>.dt-date-head>.dt-chevron,
+  details[open]>.dt-document-head>.dt-chevron{transform:rotate(90deg)}
+  .dt-body{border-top:1px solid var(--line);padding:2px 9px 10px;background:var(--panel)}
+  .dt-date{margin-top:5px}
+  .dt-date-head{display:flex;align-items:center;gap:7px;padding:9px 4px;color:var(--dim);font-size:12px}
+  .dt-date-head time{flex:1;font-weight:600;letter-spacing:.3px}
+  .dt-date-docs{display:flex;flex-direction:column;gap:6px;border-left:1px solid var(--line);padding-left:9px;margin-left:10px}
+  .dt-document{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+  .dt-document-head{display:flex;gap:9px;align-items:center;padding:10px}
+  .dt-document-head:hover{background:rgba(76,141,255,.05)}
+  .dt-document[open]{border-color:#3b4e6d}
+  .dt-type{display:grid;place-items:center;flex:none;width:35px;height:39px;border-radius:7px;
+            border:1px solid rgba(76,141,255,.18);background:rgba(76,141,255,.08);color:#8ab4ff;
+            font-size:9px;font-weight:700;letter-spacing:.3px}
+  .dt-type[data-type="pdf"]{color:#e5a19e;border-color:rgba(229,161,158,.18);background:rgba(229,161,158,.07)}
+  .dt-type[data-type="xlsx"],.dt-type[data-type="csv"]{color:#8bc7ab;border-color:rgba(139,199,171,.18);background:rgba(139,199,171,.07)}
+  .dt-document-info{flex:1;min-width:0}
+  .dt-document-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
+                    overflow-wrap:anywhere;line-height:1.5;font-size:12px;font-weight:500;color:var(--fg)}
+  .dt-document-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;color:var(--dim);font-size:10px}
+  .dt-status{display:inline-flex;align-items:center;gap:5px}
+  .dt-status::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+  .dt-status[data-tone="ok"]{color:#8bc7ab}.dt-status[data-tone="warn"]{color:var(--warn)}
+  .dt-status[data-tone="error"]{color:#e99a9a}.dt-status[data-tone="busy"]{color:#8ab4ff}
+  .document-files{padding:11px 10px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+  .document-files details{margin:8px 0;padding-left:9px;border-left:1px solid var(--line)}
+  .document-files summary{padding:4px 0;color:var(--fg)}
+  .document-files summary::before{content:"›";display:inline-block;width:12px;color:var(--dim)}
+  .document-files details[open]>summary::before{content:"⌄"}
+  .document-files a{display:block;color:var(--acc);padding:5px 0}
+  .document-files a:hover{text-decoration:underline}
+  .document-files .mini{font-size:11px}.dt-more{display:block;width:100%;margin-top:10px;padding:8px}
+  @media(prefers-reduced-motion:reduce){.dt-chevron{transition:none}}
   #composer input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 12px}
   .row{display:flex;align-items:center;gap:8px;margin:8px 0}
   .hint{color:var(--dim);font-size:12px}
   a{color:var(--acc);text-decoration:none}
   /* —— 我的产物抽屉（文件是产物，按“一次产出”分组，不全局平铺）—— */
   #prodScrim{position:fixed;inset:0;background:rgba(0,0,0,.36);z-index:60}
-  #prodPanel{position:fixed;top:0;right:0;bottom:0;width:min(390px,94vw);
+  #prodPanel{position:fixed;top:0;right:0;bottom:0;width:min(440px,94vw);
              background:var(--panel);border-left:1px solid var(--line);z-index:61;
              display:flex;flex-direction:column;box-shadow:-10px 0 24px rgba(0,0,0,.25)}
   #prodPanel .head{display:flex;align-items:center;gap:8px;padding:10px 14px;
@@ -411,9 +453,77 @@
   .hitem.sel{background:var(--panel2);border:1px solid var(--acc)}
   .hitem .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .hitem .d{flex:none;color:var(--dim);font-size:10px}
+  #cfgPanel{width:min(1120px,calc(100vw - 28px))}
+  .cfg-tabs{display:flex;gap:8px;position:sticky;top:0;z-index:2;background:var(--panel2);padding:12px 0}
+  .cfg-tabs button{background:transparent;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:9px 18px}
+  .cfg-tabs button[aria-selected="true"]{color:var(--fg);border-color:var(--acc);background:rgba(80,140,255,.12)}
+  .cfg-connection{border-top:1px solid var(--line);padding-top:10px;margin-bottom:14px}
+  .cfg-connection summary{cursor:pointer;color:var(--dim);font-size:12px;padding:4px 0 12px}
+  .cfg-model{border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:10px}
+  .cfg-model-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .cfg-model-head b{overflow-wrap:anywhere}.cfg-model>code{font-size:11px;color:var(--dim);overflow-wrap:anywhere}
+  .cfg-model-actions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap}
+  .cfg-model-edit{margin-top:14px}.cfg-capabilities{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  #cfgPanel .cfg-capabilities input,#cfgWebEnabled{width:auto}
+  .cfg-capabilities label{display:flex;align-items:center;gap:4px;font-size:12px}
+  .cfg-model .tag{font-size:11px}.cfg-advanced{margin-top:12px}.cfg-advanced summary{cursor:pointer;color:var(--dim);font-size:12px}
+  .cfg-model-test{font-size:12px;margin-top:8px;white-space:pre-wrap}
+  #cfgPanel .cfgchip .nm{max-width:min(430px,calc(100vw - 210px));overflow:hidden;text-overflow:ellipsis}
+  #cfgSourcesPane .dot.configured{background:var(--acc)}
+  @media(max-width:650px){
+    .cfg-model-actions{margin-left:0;width:100%}.cfg-tabs{flex-wrap:wrap}
+    #cfgBody{padding-left:12px;padding-right:12px}
+    #cfgPanel .cfgp-grid{grid-template-columns:76px minmax(0,1fr)}
+    #cfgPanel .cfgp-grid .fh{grid-column:2;white-space:normal}
+    #cfgPanel .cfgp-grid .fh:empty{display:none}
+    #cfgPanel .cfgp-key{flex-wrap:wrap}#cfgPanel .cfgp-key label{width:76px}
+    #cfgPanel .cfgp-key input{flex-basis:calc(100% - 90px)}
+    .cfgslot{flex-direction:column;gap:7px}.cfgslot-l{width:auto}
+  }
+  .trace-trigger{display:block;margin-top:7px;font-size:11px;padding:2px 7px;color:inherit!important;opacity:.8}
+  #traceScrim{position:fixed;inset:0;background:rgba(0,0,0,.38);z-index:78}
+  #tracePanel{position:fixed;inset:0 0 0 auto;width:min(640px,96vw);background:var(--panel);
+    border-left:1px solid var(--line);z-index:79;display:flex;flex-direction:column;box-shadow:-15px 0 50px #0005}
+  .trace-head{display:flex;gap:10px;align-items:center;padding:16px;border-bottom:1px solid var(--line)}
+  .trace-head b{flex:1}.trace-body{padding:16px;overflow:auto;flex:1;min-height:0}
+  .trace-sub{font-size:12px;color:var(--dim);line-height:1.7;overflow-wrap:anywhere}
+  .trace-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:14px 0}
+  .trace-metric{padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:9px}
+  .trace-metric b{display:block;font-size:17px}.trace-metric span{font-size:11px;color:var(--dim)}
+  .trace-step{margin:8px 0;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
+  .trace-step>summary{list-style:none;cursor:pointer;padding:11px}
+  .trace-step>summary::-webkit-details-marker{display:none}
+  .trace-step summary:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+  .trace-children{border-left:2px solid #3b4e6d;margin:0 10px 10px 14px;padding-left:10px}
+  .trace-children>.trace-step{background:var(--panel)}
+  .trace-included{font-size:11px;color:#9fb6d8;margin-top:6px}
+  .trace-duration{flex:none;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .trace-duration small{font-size:10px;color:var(--dim);margin-right:4px}
+  .trace-meta{margin:8px 10px;color:var(--dim);font-size:11px}
+  .trace-meta>summary{cursor:pointer;padding:4px 0}
+  .trace-step-line{display:flex;align-items:center;gap:8px;font-size:12px}
+  .trace-step>summary>.trace-step-line::before{content:'›';color:var(--dim);font-size:16px;flex:none}
+  .trace-step[open]>summary>.trace-step-line::before{transform:rotate(90deg)}
+  .trace-step-line b{flex:1;min-width:0;overflow-wrap:anywhere;font-weight:500}
+  .trace-state{font-size:10px;color:var(--dim);flex:none}
+  .trace-state[data-state="error"],.trace-state[data-state="interrupted"]{color:#e99a9a}
+  .trace-state[data-state="success"]{color:#8bc7ab}.trace-state[data-state="running"]{color:#8ab4ff}
+  .trace-bar{height:3px;background:var(--line);margin-top:8px;border-radius:3px;overflow:hidden}
+  .trace-bar i{display:block;height:100%;background:var(--acc);min-width:2px}
+  .trace-step[data-state="error"] .trace-bar i{background:var(--err)}
+  .trace-step pre{margin:0;padding:10px;border-top:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;color:var(--dim)}
+  .trace-related{display:block;width:100%;text-align:left;margin:7px 0;padding:9px}
+  .trace-note{font-size:12px;color:var(--warn);margin:10px 0}
+  @media(max-width:450px){.trace-body{padding:12px}.trace-metrics{gap:5px}.trace-metric{padding:8px}.trace-metric b{font-size:15px}}
 </style>
 </head>
 <body>
+<div id="traceScrim" style="display:none" onclick="closeTrace()"></div>
+<section id="tracePanel" style="display:none" role="dialog" aria-modal="true" aria-label="执行详情">
+  <div class="trace-head"><b>执行详情</b><button class="ghost mini" onclick="refreshTrace()">刷新</button>
+    <button class="ghost mini" onclick="closeTrace()" aria-label="关闭执行详情">✕</button></div>
+  <div class="trace-body" id="traceBody"></div>
+</section>
 <!-- 登录视图：未登录时盖在最上面（会话/任务/档案都是"每个人的"，必须先有身份） -->
 <div id="auth" style="display:none">
   <div class="authBox">
@@ -473,16 +583,23 @@
   <div id="cfgBody">
     <div class="hint" id="cfgHint"></div>
 
-    <div class="cfgsec"><span class="cfgsec-n">1</span><div class="cfgsec-t">
-      <b>每个功能用哪个模型</b>
-      <span class="hint">依次尝试，第一个不可用时自动切换到下一个。</span></div></div>
-    <div id="cfgSlots"></div>
-
-    <div class="cfgsec"><span class="cfgsec-n">2</span><div class="cfgsec-t">
-      <b>模型来源</b>
-      <span class="hint">① 中所选模型均来自此处，每个来源包含接口地址与密钥。</span></div></div>
-    <div id="cfgProvs"></div>
-
+    <div class="cfg-tabs" role="tablist" aria-label="模型配置视图">
+      <button id="cfgTabAssign" role="tab" onclick="cfgSetTab('assign')">功能分配</button>
+      <button id="cfgTabSources" role="tab" onclick="cfgSetTab('sources')">来源与模型</button>
+    </div>
+    <div id="cfgAssignPane" role="tabpanel">
+      <div class="cfgsec"><div class="cfgsec-t"><b>每个功能使用哪些模型</b>
+        <span class="hint">选择具体模型并排列主备顺序；只显示支持该能力的模型。</span></div></div>
+      <div id="cfgSlots"></div>
+      <div class="cfgsec"><div class="cfgsec-t"><b>网页检索 · 工具服务</b>
+        <span class="hint">复用官方 DeepSeek 来源的密钥，独立于主对话模型。</span></div></div>
+      <div id="cfgWebSearch"></div>
+    </div>
+    <div id="cfgSourcesPane" role="tabpanel">
+      <div class="cfgsec"><div class="cfgsec-t"><b>连接一次，配置多个模型</b>
+        <span class="hint">地址与密钥按来源保存；每个模型独立选择能力和参数。</span></div></div>
+      <div id="cfgProvs"></div>
+    </div>
   </div>
 
   <!-- 钉底保存条：提示语在按钮正上方，永远同屏（docs/pitfalls.md那条的正面解法） -->
@@ -657,6 +774,7 @@ async function openThread(id, sd){
     const el=addMsg(cls,"");
     if(cls==="a" && m.content) renderMsgText(el,m.content);
     else el.innerHTML=esc(m.content||"");
+    if(cls==="u" && m.trace_id)attachTraceButton(m.trace_id,el);
   });
   // 会话里若还挂着一个待批准的**危险操作**，把它重画出来 —— 否则用户看到的是
   // "agent 在等允许、屏幕上什么都没有"，只能盲敲"允许"。
@@ -880,7 +998,9 @@ async function send(text,opts={}){
   documentSendEpochs.set(epoch,(documentSendEpochs.get(epoch)||0)+1);
   let streamThreadId=requestedThreadId;
   const ownsView=()=>viewEpoch===epoch && threadId===streamThreadId;
-  if(!opts.fromApprove&&!opts.resumeTurn&&!opts.hideUser){ addMsg("u",esc(text)); }
+  let traceUser=null;
+  if(!opts.fromApprove&&!opts.resumeTurn&&!opts.hideUser){ traceUser=addMsg("u",esc(text)); }
+  else traceUser=[...document.querySelectorAll('#msgs .m.u')].at(-1)||null;
   breakBubble(); setSend(false);
   // 先"正在理解"——路由（判词）这一段最长，先给个交代，别让界面一片死寂
   showPending("正在理解你的意思…");
@@ -900,6 +1020,9 @@ async function send(text,opts={}){
         // 不渲染旧会话的 stage/delta/tool/card/错误；完成时只刷新左侧历史，让它可回看。
         if(ev.type==="done") refreshHistory();
         return;
+      }
+      else if(ev.type==="trace"){
+        attachTraceButton(ev.trace_id,traceUser);
       }
       else if(ev.type==="stage"){ setPending(ev.text||"正在思考…"); }   // 路由结束、开始生成
       // 模型连不上、正在退避重连（服务端 core/model.py 的 RETRY_WAITS）：等待态里报倒计时
@@ -1047,21 +1170,48 @@ async function cancelDocumentTurn(id){
   if(!r.ok){const d=await r.json();addMsg("err",esc(d.detail||"取消失败"));}
 }
 let documentProductRows=[], nextDocumentOffset=null;
+const DOCUMENT_TREE_CHEVRON='<svg class="dt-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 4 4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function documentProductSize(bytes){
+  if(bytes<1024)return `${bytes} B`;
+  if(bytes<1024*1024)return `${(bytes/1024).toFixed(1)} KB`;
+  return `${(bytes/1024/1024).toFixed(1)} MB`;
+}
+function documentProductRow(d){
+  const ext=String(d.suffix||fileExt(d.name)||'FILE').replace(/^\./,'').toLowerCase();
+  const run=(d.runs||[]).find(r=>r.id===d.latest_run)||{};
+  const tone=d.status==='completed'?'ok':d.status==='failed'?'error':
+    ['partial','cancelled','interrupted'].includes(d.status)?'warn':'busy';
+  const meta=[Number.isFinite(d.size)?documentProductSize(d.size):'',
+    Number.isFinite(run.chunks)?`${run.chunks} 个片段`:''].filter(Boolean).map(esc).join(' · ');
+  return `<details class="dt-document" data-tree-key="doc:${esc(d.id)}" data-document="${esc(d.id)}" ontoggle="loadDocumentProduct(this)">
+    <summary class="dt-document-head" title="${esc(d.name)}">
+      <span class="dt-type" data-type="${esc(ext)}" aria-hidden="true">${esc(ext.slice(0,5).toUpperCase())}</span>
+      <span class="dt-document-info"><span class="dt-document-name">${esc(d.name)}</span>
+        <span class="dt-document-meta"><span class="dt-status" data-tone="${tone}">${esc(documentState(d.status))}</span>${meta?`<span>${meta}</span>`:''}</span>
+      </span>${DOCUMENT_TREE_CHEVRON}
+    </summary><div class="document-files">正在读取…</div>
+  </details>`;
+}
 function renderDocumentProducts(rows,offset=null,append=false){
   documentProductRows=append?[...new Map([...documentProductRows,...rows].map(d=>[d.id,d])).values()]:rows;
   nextDocumentOffset=offset;
-  document.querySelector('#prodList .document-tree')?.remove();
+  const previous=document.querySelector('#prodList .document-tree');
+  const opened=new Map([...(previous?.querySelectorAll('[data-tree-key]')||[])].map(n=>[n.dataset.treeKey,n.open]));
+  if(previous)opened.set('root',previous.open);
+  previous?.remove();
   if(!documentProductRows.length&&offset===null)return;
   $("#prodList .empty")?.remove();
   const dates={};documentProductRows.forEach(d=>(dates[d.date]??=[]).push(d));
   const tree=document.createElement("details");tree.className="document-tree";tree.open=true;
-  tree.innerHTML='<summary><b>orignChunk</b></summary>'+Object.entries(dates).map(([date,docs])=>
-    `<details open><summary>${esc(date)}</summary>${docs.map(d=>
-      `<details data-document="${d.id}" ontoggle="loadDocumentProduct(this)">
-        <summary>${esc(d.name)} · ${esc(documentState(d.status))}</summary><div class="document-files">正在读取…</div>
-      </details>`).join("")}</details>`).join("")+
-    (offset!==null?'<button class="ghost mini" onclick="moreDocumentProducts(this)">加载更多文档</button>':'');
+  tree.innerHTML=`<summary class="dt-root-head"><span class="dt-root-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3V7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.6"/></svg></span>
+    <span class="dt-root-title"><b>文档解析</b><small>orignChunk</small></span><span class="dt-count">${offset!==null?'已加载 ':''}${documentProductRows.length} 份</span>${DOCUMENT_TREE_CHEVRON}</summary>
+    <div class="dt-body">${Object.entries(dates).sort(([a],[b])=>b.localeCompare(a)).map(([date,docs])=>
+    `<details class="dt-date" data-tree-key="date:${esc(date)}" open><summary class="dt-date-head">${DOCUMENT_TREE_CHEVRON}<time>${esc(date)}</time><span class="dt-count">${docs.length} 份</span></summary>
+      <div class="dt-date-docs">${docs.map(documentProductRow).join('')}</div></details>`).join('')}
+    ${offset!==null?'<button class="ghost mini dt-more" onclick="moreDocumentProducts(this)">加载更多文档</button>':''}</div>`;
   $("#prodList").prepend(tree);
+  if(opened.has('root'))tree.open=opened.get('root');
+  tree.querySelectorAll('[data-tree-key]').forEach(n=>{if(opened.has(n.dataset.treeKey))n.open=opened.get(n.dataset.treeKey);});
 }
 async function moreDocumentProducts(button){
   button.disabled=true;
@@ -1994,6 +2144,99 @@ async function watchThreadJob(sd, showEnded){
   }catch(e){ /* job 可能刚结束/不存在，静默即可 */ }
 }
 
+// 执行详情从追踪表读取，聊天历史只保留关联 ID；旧消息没有采集记录。
+let traceViewId='',traceViewEpoch=0,traceRefreshTimer=null,traceFocus=null;
+const TRACE_STATES={running:'运行中',success:'成功',error:'失败',interrupted:'已中断',
+  waiting_parse:'等待附件或恢复回答',waiting_approval:'等待批准',cancelled:'已取消',skipped:'重复恢复，未执行'};
+function traceDuration(ms){return Number.isFinite(ms)?(ms<1000?Math.round(ms)+' ms':(ms/1000).toFixed(2)+' s'):'未采集';}
+function attachTraceButton(id,node){
+  if(!node||!id)return;
+  node.dataset.traceId=id;
+  let button=node.querySelector('.trace-trigger');
+  if(!button){button=document.createElement('button');button.className='ghost trace-trigger';node.appendChild(button);}
+  button.textContent='查看执行详情';button.onclick=()=>openTrace(id);
+}
+function closeTrace(){
+  traceViewEpoch++;traceViewId='';clearTimeout(traceRefreshTimer);
+  $('#tracePanel').style.display='none';$('#traceScrim').style.display='none';
+  traceFocus?.focus();
+}
+function openTrace(id){
+  if($('#tracePanel').style.display==='none')traceFocus=document.activeElement;
+  traceViewEpoch++;traceViewId=id;
+  $('#tracePanel').style.display='flex';$('#traceScrim').style.display='block';
+  $('#traceBody').textContent='正在读取执行记录…';
+  $('#tracePanel button').focus();refreshTrace();
+}
+async function refreshTrace(){
+  if(!traceViewId)return;
+  clearTimeout(traceRefreshTimer);
+  const id=traceViewId,epoch=++traceViewEpoch;
+  const active=()=>traceViewId===id&&traceViewEpoch===epoch;
+  try{
+    const r=await fetch('/api/traces/'+encodeURIComponent(id));
+    const data=await r.json();if(!active())return;
+    if(!r.ok)throw new Error(r.status===404?'未采集或记录已过保留期限':(data.detail||'读取失败'));
+    renderTrace(data);
+    if(['running','waiting_parse'].includes(data.state)||(data.related||[]).some(t=>t.state==='running'))
+      traceRefreshTimer=setTimeout(()=>{if(active())refreshTrace();},1500);
+  }catch(e){if(active())$('#traceBody').textContent=String(e.message||'读取失败，请重试');}
+}
+function renderTrace(data){
+  const body=$('#traceBody');
+  const expanded=new Map([...body.querySelectorAll('details[data-span]')].map(n=>[n.dataset.span,n.open]));
+  const steps=data.spans||[],map=new Map(steps.map(s=>[s.id,s]));
+  const children=new Map();
+  steps.forEach(s=>{const parent=map.has(s.parent_span_id)?s.parent_span_id:'';if(!children.has(parent))children.set(parent,[]);children.get(parent).push(s);});
+  const duration=s=>Number.isFinite(s.duration_ms)?s.duration_ms:Math.max(0,Date.now()-s.created*1000);
+  const max=Math.max(1,...steps.map(s=>(s.created-data.created)*1000+duration(s)));
+  const modelSteps=steps.filter(s=>s.kind==='model');
+  const counts='主模型请求 '+modelSteps.length+' 次 · 意图调用 '+steps.filter(s=>s.kind==='route_attempt').length+' 次 · 工具 '+steps.filter(s=>s.kind==='tool').length+' 次';
+  const seen=new Set();
+  function renderStep(s){
+    if(seen.has(s.id))return '';seen.add(s.id);
+    const a=s.attributes||{},nested=(children.get(s.id)||[]).filter(c=>!seen.has(c.id)),group=nested.length>0;
+    let label=s.name;
+    if(s.kind==='request')label=a.resume?'恢复这条消息':'处理这条消息';
+    if(s.kind==='model')label='主模型第 '+(modelSteps.indexOf(s)+1)+' 次请求';
+    if(s.kind==='route_attempt')label='调用意图模型'+(a.model?' · '+a.model:'');
+    if(s.kind==='model_attempt')label='调用模型'+(a.model?' · '+a.model:'');
+    const description=[!['route_attempt','model_attempt'].includes(s.kind)?a.model:'',a.tool,a.skill,a.error_type].filter(Boolean).map(String).join(' · ');
+    const offset=Math.max(0,(s.created-data.created)*1000/max*100),width=Math.min(100-offset,Math.max(.3,duration(s)/max*100));
+    const meta='<details class="trace-meta"><summary>技术详情</summary><pre>'+esc(JSON.stringify({type:s.kind,request_id:s.request_id,started_at:new Date(s.created*1000).toISOString(),...a},null,2))+'</pre></details>';
+    return '<details class="trace-step" data-span="'+esc(s.id)+'" data-state="'+esc(s.state)+'"'+((expanded.has(s.id)?expanded.get(s.id):group)?' open':'')+'>'
+      +'<summary><div class="trace-step-line"><b>'+esc(label)+'</b><span class="trace-state" data-state="'+esc(s.state)+'">'+esc(TRACE_STATES[s.state]||s.state)+'</span><span class="trace-duration"><small>'+(group?'合计':'用时')+'</small>'+(Number.isFinite(s.duration_ms)?traceDuration(s.duration_ms):'运行中')+'</span></div>'
+      +(description?'<div class="trace-sub">'+esc(description)+'</div>':'')
+      +(group?'<div class="trace-included">其中包含下方 '+nested.length+' 个子步骤，耗时已计入合计</div>':'')
+      +'<div class="trace-bar" aria-hidden="true"><i style="margin-left:'+offset.toFixed(2)+'%;width:'+width.toFixed(2)+'%"></i></div></summary>'
+      +(group?'<div class="trace-children">'+nested.map(renderStep).join('')+'</div>':'')+meta+'</details>';
+  }
+  let timeline=(children.get('')||[]).map(renderStep).join('');
+  // 兼容缺失父节点/病态循环，仍展示有界记录，不在界面递归打转。
+  steps.forEach(s=>{if(!seen.has(s.id))timeline+=renderStep(s);});
+  const related=(data.related||[]).map(t=>'<button class="ghost mini trace-related" data-related="'+esc(t.id)+'">后台任务 · '+esc(t.attributes?.skill||'')+' · '+esc(TRACE_STATES[t.state]||t.state)+' →</button>').join('');
+  body.innerHTML='<div class="trace-sub"><span class="trace-state" data-state="'+esc(data.state)+'">'+esc(TRACE_STATES[data.state]||data.state)+'</span> · '+esc(counts)+'</div>'
+    +'<div class="trace-sub">'+esc(new Date(data.created*1000).toLocaleString())+'<br>Trace '+esc(data.id)+'</div>'
+    +'<div class="trace-metrics"><div class="trace-metric"><b>'+traceDuration(data.elapsed_ms)+'</b><span>总历时（含附件等待）</span></div>'
+    +'<div class="trace-metric"><b>'+traceDuration(data.active_ms)+'</b><span>请求处理累计</span></div>'
+    +'<div class="trace-metric"><b>'+traceDuration(data.first_text_ms)+'</b><span>生成请求首段文本</span></div></div>'
+    +(data.has_errors?'<p class="trace-note">期间发生过失败；请展开步骤查看重试或降级。</p>':'')
+    +(data.incomplete?'<p class="trace-note">部分追踪记录未能保存，时间线可能不完整。</p>':'')
+    +'<div class="trace-sub">阶段显示合计时间，框内的子调用已包含在合计中，请勿重复相加。点击阶段可收起子步骤；参数与指纹在「技术详情」中查看。</div>'
+    +timeline+related
+    +(data.origin_trace_id?'<button class="ghost mini trace-related" data-related="'+esc(data.origin_trace_id)+'">← 发起这次执行的对话</button>':'');
+  body.querySelectorAll('[data-related]').forEach(b=>b.onclick=()=>openTrace(b.dataset.related));
+}
+document.addEventListener('keydown',event=>{
+  if($('#tracePanel').style.display==='none')return;
+  if(event.key==='Escape'){closeTrace();event.preventDefault();}
+  if(event.key==='Tab'){
+    const nodes=[...$('#tracePanel').querySelectorAll('button,summary')].filter(n=>n.getClientRects().length&&!n.disabled),first=nodes[0],last=nodes.at(-1);
+    if(event.shiftKey&&document.activeElement===first){last?.focus();event.preventDefault();}
+    else if(!event.shiftKey&&document.activeElement===last){first?.focus();event.preventDefault();}
+  }
+});
+
 // ── “我的产物”抽屉：按一次产出分组，最新组展开、更早的折叠 ──
 function fmtWhen(ts){
   if(!ts) return "";
@@ -2043,19 +2286,17 @@ function toggleProducts(show){
 }
 
 // ── 模型配置弹窗（顶栏 ⚙）─────────────────────────────────────────
-// 配置结构和服务端 station/modelcfg.py 一致，两份：providers[] 是"连接 + 模型名"，
-// slots{} 是各槽位自己的**降级链**（有序的 provider id，第一位是主通道，后面是
-// 兜底顺序）。改这个弹窗时，槽位清单要和服务端的 SLOT_LABELS 对上。
+// 来源保存连接信息和 models[]；slots{} 保存各功能的有序 provider~model 引用。
+// 模型能力与参数由 profile 管理，槽位清单与服务端 SLOT_LABELS 对齐。
 // ★ GET 回来的 provider 里**没有明文 key**，只有 has_key / key_source；
 //   提交时 api_key 的三种写法含义不同（不带这个字段=不改 / ""=清空 / 非空=覆盖）。
 let cfgData=null;      // 服务端回来的配置（掩码版）
+let cfgTab='assign',cfgTests={},cfgRevision=0;
+const cfgExpandedModels=new Set();
 let cfgKeys={};        // provider id → 用户刚敲的 key。★ 必须存着：任何结构操作
                        // （加/移/删 provider、排链）都会重绘 provider 区，不存就会被
                        // 重绘冲掉、保存时静默丢失（踩过）
-// 槽位 → provider 的角色字段。★ 只有三个：原先的「给材料分类」槽 09-11 砍了，
-// 它和「通用模型」取的是同一个 text_model，档案定类现在走 chat（见 station_adapter）。
-// 槽位 → provider 上存模型名的字段。加一行的同时**服务端要一起加**
-// （modelcfg 的 SLOT_LABELS / _ROLE_KEY），否则 ① 那行渲染不出来。
+// 旧模板字段到模型能力的转换，与 modelcatalog.ROLES 保持一致。
 const CFG_ROLE={chat:"text_model",route:"route_model",vision:"vision_model",
                 speech:"speech_model",video:"video_model"};
 
@@ -2091,12 +2332,12 @@ function cfgSay(html, isError){
 async function cfgLoad(){
   try{
     const d=await (await fetch("/api/modelconfig")).json();
-    cfgData=d; cfgKeys={};
+    cfgData=d; cfgKeys={};cfgDirty();
     cfgRender();
     cfgSay("");
     $("#cfgHint").innerHTML=d.fake
       ? '<span class="cfgWarn">离线模式：当前配置不会生效，仅用于界面预览。</span>'
-      : "";
+      : esc(d.config?.warn||"");
   }catch(e){ $("#cfgHint").textContent="配置读取失败，请刷新后重试。"; }
 }
 
@@ -2120,56 +2361,76 @@ function cfgTogglePw(pid, btn){
   btn.textContent = showing ? "显示" : "隐藏";
 }
 
-// 某家 provider 在某个槽位用哪个模型名（和服务端 _model_for 同口径：
-// 判词没填就跟着文本模型走）。返回空串 = 这家不参与这个槽位。
-function cfgModelOf(p,slot){
-  if(p.route_protocol==="systemone" && slot!=="route") return "";
-  if(p.route_protocol==="systemone") return p.route_model||"";
-  return (p[CFG_ROLE[slot]]||(slot==="route"?p.text_model:""))||"";
-}
-
 function cfgRender(){
   if(!cfgData) return;
   const c=cfgData.config;
+  (c.providers||[]).forEach(cfgEnsureModels);
+  $('#cfgAssignPane').style.display=cfgTab==='assign'?'block':'none';
+  $('#cfgSourcesPane').style.display=cfgTab==='sources'?'block':'none';
+  $('#cfgTabAssign').setAttribute('aria-selected',String(cfgTab==='assign'));
+  $('#cfgTabSources').setAttribute('aria-selected',String(cfgTab==='sources'));
+  $('#cfgAddSel').style.display=cfgTab==='sources'?'':'none';
   $("#cfgSlots").innerHTML=cfgData.slots.map(cfgSlotRow).join("");
   $("#cfgProvs").innerHTML=(c.providers||[]).map(cfgProvRow).join("");
+  cfgRenderWebSearch();
   // 「＋ 添加模型来源」的下拉：常用模板（服务端给），选中即加一行填好的
   const sel=$("#cfgAddSel");
   sel.innerHTML='<option value="">＋ 添加模型来源…</option>'
     +(cfgData.presets||[]).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join("");
 }
 
+function cfgOfficialSearch(p){
+  try{
+    const u=new URL(p.base_url||'');
+    return u.protocol==='https:'&&u.hostname==='api.deepseek.com'&&(!u.port||u.port==='443')
+      &&['','/v1'].includes(u.pathname.replace(/\/$/,''))&&!u.username&&!u.password&&!u.search&&!u.hash
+      &&(Array.isArray(p.models)||p.route_protocol!=='systemone');
+  }catch{return false;}
+}
+
+function cfgRenderWebSearch(){
+  if(!cfgData) return;
+  const c=cfgData.config,w=c.web_search||{enabled:true,provider_id:'deepseek'};
+  const opts=(c.providers||[]).filter(cfgOfficialSearch).map(p=>'<option value="'+esc(p.id)+'"'
+    +(p.id===w.provider_id?' selected':'')+'>'+esc(p.label||p.id)+'</option>').join('');
+  const status=cfgData.web_search_status||{};
+  $('#cfgWebSearch').innerHTML='<div class="cfgp"><div class="cfgp-body"><div class="cfgp-grid">'
+    +'<label for="cfgWebEnabled">启用网页检索</label><span><input id="cfgWebEnabled" type="checkbox"'
+    +(w.enabled?' checked':'')+'></span><em class="fh">搜索与读取公开网页</em>'
+    +'<label for="cfgWebProvider">检索来源</label><select id="cfgWebProvider"><option value="">请选择官方 DeepSeek 来源</option>'
+    +opts+'</select><em class="fh">复用所选来源的密钥</em></div>'
+    +'<p class="hint">主对话模型无需更换。请在「来源与模型」中填写官方 DeepSeek Key；检索按服务商成功请求次数计费。</p>'
+    +'<p class="hint">已保存配置：'+esc(status.available?'已填写检索来源和密钥':(status.hint||'尚未配置'))+'</p>'
+    +'<button class="ghost mini" onclick="cfgTestWebSearch()">测试搜索</button>'
+    +'<span class="cfgt" id="cfgWebTest"></span></div></div>';
+}
+
+async function cfgTestWebSearch(){
+  const say=text=>{const el=$('#cfgWebTest');if(el)el.textContent=text;};
+  if(!await cfgSave(true))return;
+  say(' 正在测试搜索……');
+  try{
+    const r=await fetch('/api/websearch/test',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    say(d.ok?' 搜索正常 · '+(d.ms||0)+' ms · '+(d.results||[]).length+' 条结果'+(d.cache_hit?'（缓存）':'')
+      :' 搜索失败：'+(d.hint||d.detail||d.error||'请求失败'));
+  }catch{say(' 无法完成测试，请检查服务连接');}
+}
+
 function cfgSlotRow(s){
-  const c=cfgData.config, chain=c.slots[s.id]||[];
-  // 序号只在"有两家以上"时才显示：只有一家时那个 "1" 是纯噪音。
-  const multi=chain.length>1;
-  const chips=chain.map((pid,i)=>{
-    const p=c.providers.find(x=>x.id===pid)||{id:pid,label:pid};
-    return '<span class="cfgchip'+(i===0?' pri':'')+'">'
-      +(multi?'<i class="ord">'+(i+1)+'</i>':'')
-      +'<span class="nm">'+esc(p.label||pid)+'</span>'
-      +'<em class="cm">'+esc(cfgModelOf(p,s.id)||"—")+'</em>'
-      +'<span class="cb">'
-      +'<button title="往前挪一位（越靠前越优先）" onclick="cfgMove(\''+s.id+'\','+i+',-1)">↑</button>'
-      +'<button title="往后挪一位" onclick="cfgMove(\''+s.id+'\','+i+',1)">↓</button>'
-      +'<button title="这一行不用它" onclick="cfgDrop(\''+s.id+'\','+i+')">✕</button>'
-      +'</span></span>';
-  }).join("")||'<span class="hint">尚未选择，请先在下方 ② 添加模型来源。</span>';
-  // 下拉里只列"这家在这一行有可用模型名、且还没选进来"的 —— 于是"看图那一行选到
-  // 纯文字模型"这种错误在界面上根本没法表达出来（保存时服务端还会再拦一道）。
-  const opts=c.providers.filter(p=>cfgModelOf(p,s.id)&&!chain.includes(p.id))
-    .map(p=>'<option value="'+esc(p.id)+'">'+esc(p.label||p.id)+'</option>').join("");
-  const others=cfgData.slots.filter(x=>x.id!==s.id)
-    .map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join("");
-  return '<div class="cfgslot"><span class="cfgslot-l"><b>'+esc(s.label)+'</b>'
-    +'<span class="hint">'+esc(s.hint||"")+'</span></span>'
-    +'<span class="cfgslot-r">'+chips
-    +'<span class="cfgslot-acts">'
-    +'<select title="为这一行添加一个模型来源" onchange="cfgAddTo(\''+s.id+'\',this.value);this.value=\'\'">'
-    +'<option value="">＋ 添加来源</option>'+opts+'</select>'
-    +'<select title="将本行的顺序复制到另一行" onchange="cfgApplyTo(\''+s.id+'\',this.value);this.value=\'\'">'
-    +'<option value="">复制顺序至</option>'+others+'</select>'
-    +'</span></span></div>';
+  const c=cfgData.config,chain=c.slots[s.id]||[],choices=cfgChoices(s.id);
+  const chips=chain.map((ref,i)=>{
+    const item=choices.find(x=>x.ref===ref),label=item?(item.p.label||item.p.id)+' / '+(item.m.label||item.m.name):'模型已移除';
+    return '<span class="cfgchip'+(i===0?' pri':'')+'">'+(chain.length>1?'<i class="ord">'+(i+1)+'</i>':'')
+      +'<span class="nm">'+esc(label)+'</span><span class="cb">'
+      +'<button title="优先使用" onclick="cfgMove(\''+s.id+'\','+i+',-1)">↑</button>'
+      +'<button title="向后移动" onclick="cfgMove(\''+s.id+'\','+i+',1)">↓</button>'
+      +'<button title="移除此功能分配" onclick="cfgDrop(\''+s.id+'\','+i+')">✕</button></span></span>';
+  }).join('')||'<span class="hint">尚未分配模型</span>';
+  const options=choices.filter(x=>!chain.includes(x.ref)).map(x=>'<option value="'+esc(x.ref)+'">'+esc((x.p.label||x.p.id)+' / '+(x.m.label||x.m.name))+'</option>').join('');
+  return '<div class="cfgslot"><span class="cfgslot-l"><b>'+esc(s.label)+'</b><span class="hint">'+esc(s.hint||'')+'</span></span>'
+    +'<span class="cfgslot-r">'+chips+'<select title="添加支持此能力的模型" onchange="cfgAddTo(\''+s.id+'\',this.value);this.value=\'\'">'
+    +'<option value="">＋ 添加模型</option>'+options+'</select></span></div>';
 }
 
 // 一个「字段名 + 输入框 + 右侧常驻说明」三格。字段名用大白话，占位符只放"例子"。
@@ -2178,41 +2439,9 @@ function cfgSlotRow(s){
 // 保证同一张卡里所有输入框右边缘齐平（见上面 .cfgp-grid 的 ★）。
 function cfgField(id, key, label, value, ph, fh){
   return '<label for="cfgp-'+id+'-'+key+'">'+esc(label)+'</label>'
-    +'<input id="cfgp-'+id+'-'+key+'" value="'+esc(value||"")+'" placeholder="'+esc(ph)+'">'
+    +'<input oninput="cfgDirty()" id="cfgp-'+id+'-'+key+'" value="'+esc(value||"")+'" placeholder="'+esc(ph)+'"'
+    +(key==='url'?' onchange="cfgCollect();cfgRenderWebSearch()"':'')+'>'
     +'<em class="fh">'+esc(fh||"")+'</em>';
-}
-
-// 「推理强度」——**只挂在「通用模型」那一行下面**，别处不挂。
-// 它是"对话要多想多久"的档位：判词要的是快、视频压根不是对话模型、识图走另一条链，
-// 给它们发没有意义（服务端也因此只在 chat 那一条上带这个参数，见 modelcfg._entry）。
-// 右侧说明照老规矩**常驻**：占位符一填就没了，用户填完还得看得到判断依据。
-// ★ 但这一列只有 152px、`white-space:nowrap` 超出就打省略号（见 .cfgp-grid .fh），
-//   所以**常驻文字必须短**（同卡其它几行都是 7~12 字）。完整解释挂 title 上，
-//   鼠标停上去能看到 —— 写成一大段的话会被截成"只对「通用模型」生效，推理…"，
-//   等于那半句白写了。
-function cfgEffortField(id, value){
-  const cur=(value||"");
-  const opts=CFG_EFFORTS.map(function(o){
-    return '<option value="'+o[0]+'"'+(o[0]===cur?" selected":"")+'>'+esc(o[1])+'</option>';
-  }).join("");
-  const full="只对「通用模型」生效。推理模型会先想一大段才开口，调低档位能明显变快；"
-    +"留空则完全不发送这个参数。点「测试连接」可以验证此来源是否接受它。";
-  return '<label for="cfgp-'+id+'-effort">推理强度</label>'
-    +'<select id="cfgp-'+id+'-effort">'+opts+'</select>'
-    +'<em class="fh" title="'+esc(full)+'">推理模型调低可明显变快</em>';
-}
-
-function cfgRouteFields(id,p){
-  const protocol=p.route_protocol||"chat_completions";
-  const choices=[["chat_completions","普通模型"],["systemone","Jev 决策模型"]];
-  return '<label for="cfgp-'+id+'-protocol">意图识别接口</label>'
-    +'<select id="cfgp-'+id+'-protocol" onchange="cfgCollect();cfgRender()">'
-    +choices.map(o=>'<option value="'+o[0]+'"'+(o[0]===protocol?' selected':'')+'>'+o[1]+'</option>').join('')
-    +'</select><em class="fh">根据服务商接口选择</em>'
-    +'<label for="cfgp-'+id+'-threshold">意图识别阈值</label>'
-    +'<input id="cfgp-'+id+'-threshold" type="number" min="0" max="1" step="0.01" value="'
-    +esc(String(p.route_threshold??""))+'" placeholder="'+(protocol==="systemone"?'默认 0.8':'使用系统默认')+'">'
-    +'<em class="fh" title="范围 0 到 1，低于此值会尝试备用模型；越高越保守。Jev 的阈值需要用业务样本校准。">越高越保守，可留空</em>';
 }
 
 // 这一家的提示语：模板带来的就显示模板说明，自己加的给一句通用指引
@@ -2234,67 +2463,150 @@ function cfgKeyState(p){
   return "未配置密钥";
 }
 
-function cfgProvRow(p){
-  const id=esc(p.id);
-  const decisionOnly=p.route_protocol==="systemone";
-  const hint=cfgHintFor(p);
-  // 密钥框的内容：用户这次敲过就用他敲的，否则用服务端回给本人的真值
-  // （密码框会把它显示成 ****，点「显示」才明文）。
-  const kVal = (cfgKeys[p.id]!==undefined) ? cfgKeys[p.id] : (p.api_key||"");
-  return '<div class="cfgp">'
-    +'<div class="cfgp-h">'
-    +'<span class="dot '+(p.has_key?"ok":"warn")+'" title="'+esc(cfgKeyState(p))+'"></span>'
-    +'<b>'+esc(p.label||p.id)+'</b>'
-    +(p.builtin?'<span class="tag">内置</span>':'')
-    +'<span class="hint">· '+esc(cfgKeyState(p))+'</span>'
-    +'<span style="flex:1"></span>'
-    +'<button class="ghost mini" title="先保存当前配置，再测试此来源的连通性" onclick="cfgTest(\''+id+'\')">测试连接</button>'
-    +(p.builtin?'':'<button class="ghost mini" title="删除此来源，并同时从 ① 的各行中移除" onclick="cfgDelProv(\''+id+'\')">删除</button>')
-    +'</div>'
-    +'<div class="cfgp-body">'
-    +(hint?'<div class="cfgp-note">'+esc(hint)+'</div>':'')
-    +'<div class="cfgp-grid">'
-    // 字段顺序**跟着上面 ① 的行序**（通用 → 意图识别 → 识图 → 语音识别），用户才看得出
-    // "我在这儿填的这个名字，到底喂给 ① 的哪一行"。
-    +cfgField(id,'label','名称',(p.label||""),"便于识别的名称，如「我的智谱」")
-    +cfgField(id,'url','接口地址',(p.base_url||""),"服务商提供的 https:// 地址")
-    +(decisionOnly?'':cfgField(id,'text','通用模型',(p.text_model||""),"如 glm-5.3-flash","对话与文本生成"))
-    // 紧跟在「通用模型」下面 —— 它只作用于这一行（见 cfgEffortField 的注释）
-    +(decisionOnly?'':cfgEffortField(id,(p.reasoning_effort||"")))
-    // ★ 占位符不能举别家的模型名（比如在智谱的卡上写 "如 qwen-flash"）—— 用户会照着填错。
-    //   拿不准就写"可留空"这种跟厂商无关的话。
-    +cfgField(id,'route','意图识别模型',(p.route_model||""),p.route_protocol==="systemone"?"填写 Jev 模型名":"可留空",p.route_protocol==="systemone"?"仅用于意图识别":"留空则与「通用模型」一致")
-    +cfgRouteFields(id,p)
-    +(decisionOnly?'':cfgField(id,'vision','识图模型',(p.vision_model||""),"需支持视觉输入","不处理图片时可留空"))
-    +(decisionOnly?'':cfgField(id,'speech','语音识别模型',(p.speech_model||""),"服务商要求时填写","音频转文字；没有可填 default"))
-    // ★ 占位符不举别家模型名（老规矩，见上面 text 那行的注释）—— 内置的 Agnes 卡
-    //   本来就把模型名预填好了，用户不需要照着一个例子去填。
-    +(decisionOnly?'':cfgField(id,'video','视频生成模型',(p.video_model||""),"可留空","按文字生成短视频；不做视频时可留空"))
-    +'<span class="cfgp-key"><label for="cfgp-'+id+'-key">密钥</label>'
-    +'<input id="cfgp-'+id+'-key" type="password" autocomplete="new-password" value="'+esc(kVal)+'" placeholder="'+esc(cfgKeyPlaceholder(p))+'">'
-    +'<button class="ghost mini" title="显示框中的明文，便于核对" onclick="cfgTogglePw(\''+id+'\',this)">显示</button>'
-    +'<button class="ghost mini" title="清空此输入框（保存后生效）" onclick="cfgKeyClear(\''+id+'\')">清除</button></span>'
-    +'</div><div class="cfgt" id="cfgt-'+id+'"></div></div></div>';
+const CFG_CAP_LABELS={chat:'对话',route:'意图识别',vision:'识图',speech:'语音识别',video:'视频生成'};
+const cfgProbeSlots={};
+function cfgEnsureModels(p){
+  if(Array.isArray(p.models))return p.models;
+  const out=[],groups=new Map();
+  Object.entries(CFG_ROLE).forEach(([cap,field])=>{
+    if(p.route_protocol==='systemone'&&cap!=='route')return;
+    const name=p[field]||(cap==='route'?p.text_model:'');if(!name)return;
+    const protocol=cap==='route'?(p.route_protocol||'chat_completions'):'chat_completions';
+    const signature=JSON.stringify([name,protocol]);
+    if(!groups.has(signature)){const m={id:'legacy-'+cap,name,label:name,capabilities:[],reasoning_effort:'',route_protocol:protocol,route_threshold:null};groups.set(signature,m);out.push(m);}
+    const m=groups.get(signature);m.capabilities.push(cap);
+    if(cap==='chat')m.reasoning_effort=p.reasoning_effort||'';
+    if(cap==='route')m.route_threshold=p.route_threshold??null;
+  });
+  p.models=out;return out;
 }
-
-// 把输入框里的值读回 cfgData（结构变动前必调，否则重绘会丢掉用户刚敲的字）
-function cfgCollect(){
-  if(!cfgData) return;
-  (cfgData.config.providers||[]).forEach(p=>{
-    const g=i=>document.getElementById("cfgp-"+p.id+"-"+i);
-    const l=g("label"),u=g("url"),t=g("text"),v=g("vision"),r=g("route"),
-          sp=g("speech"),vd=g("video"),k=g("key"),ef=g("effort"),rp=g("protocol"),rt=g("threshold");
-    if(l) p.label=l.value.trim();      if(u) p.base_url=u.value.trim();
-    if(t) p.text_model=t.value.trim(); if(v) p.vision_model=v.value.trim();
-    if(r) p.route_model=r.value.trim(); if(sp) p.speech_model=sp.value.trim();
-    if(vd) p.video_model=vd.value.trim();
-    if(ef) p.reasoning_effort=ef.value;   // ""=留空（服务端语义：一个字节都不发）
-    if(rp) p.route_protocol=rp.value;
-    if(rt) p.route_threshold=rt.validity.badInput ? "invalid" : (rt.value==="" ? null : Number(rt.value));
-    if(k) cfgKeys[p.id]=k.value;       // ★ key 也一起收走，否则重绘就丢了
+function cfgChoices(cap){
+  return (cfgData.config.providers||[]).flatMap(p=>cfgEnsureModels(p)
+    .filter(m=>m.capabilities.includes(cap)&&m.name.trim())
+    .map(m=>({p,m,ref:p.id+'~'+m.id})));
+}
+function cfgDirty(){
+  cfgTests={};cfgRevision++;
+  document.querySelectorAll('.cfg-model-test').forEach(n=>n.textContent='');
+}
+function cfgSetTab(tab){cfgCollect();cfgTab=tab;cfgRender();}
+function cfgToggleModel(pid,mid){
+  cfgCollect();const ref=pid+'~'+mid;
+  cfgExpandedModels.has(ref)?cfgExpandedModels.delete(ref):cfgExpandedModels.add(ref);cfgRender();
+}
+function cfgCleanBindings(){
+  Object.keys(cfgData.config.slots).forEach(cap=>{
+    const valid=new Set(cfgData.config.providers.flatMap(p=>cfgEnsureModels(p).filter(m=>m.capabilities.includes(cap)).map(m=>p.id+'~'+m.id)));
+    cfgData.config.slots[cap]=cfgData.config.slots[cap].filter(ref=>valid.has(ref));
   });
 }
-
+function cfgModelChanged(){cfgCollect();cfgDirty();cfgCleanBindings();cfgRender();}
+function cfgAddModel(pid){
+  cfgCollect();const p=cfgData.config.providers.find(p=>p.id===pid);if(!p)return;
+  if(p.models.length>=32){cfgSay('一个来源最多配置 32 个模型',true);return;}
+  const caps=[...new Set(p.models.flatMap(m=>m.capabilities))];
+  const cap=caps.length===1?caps[0]:'chat';
+  const id='model-'+Date.now().toString(36)+'-'+Math.random().toString(16).slice(2,8);
+  p.models.push({id,label:'',name:'',capabilities:[cap],reasoning_effort:'',route_protocol:'chat_completions',route_threshold:null});
+  cfgExpandedModels.add(pid+'~'+id);cfgDirty();cfgRender();
+  document.getElementById('cfgm-'+pid+'~'+id+'-name')?.focus();
+}
+function cfgDelModel(pid,mid){
+  cfgCollect();const p=cfgData.config.providers.find(p=>p.id===pid);if(!p)return;
+  p.models=p.models.filter(m=>m.id!==mid);cfgExpandedModels.delete(pid+'~'+mid);
+  cfgDirty();cfgCleanBindings();cfgRender();
+}
+function cfgModelRow(p,m){
+  const pid=esc(p.id),mid=esc(m.id),ref=p.id+'~'+m.id,dom='cfgm-'+ref;
+  const expanded=cfgExpandedModels.has(ref),caps=m.capabilities||[];
+  const testSlot=caps.includes(cfgProbeSlots[ref])?cfgProbeSlots[ref]:caps[0];
+  const slotOpts=caps.map(c=>'<option value="'+c+'"'+(c===testSlot?' selected':'')+'>'+esc(CFG_CAP_LABELS[c])+'</option>').join('');
+  const result=Object.entries(cfgTests).filter(([key])=>key.startsWith(ref+'|')).map(([,value])=>value).join('\n');
+  let html='<div class="cfg-model" data-model-ref="'+esc(ref)+'"><div class="cfg-model-head"><b>'+esc(m.label||m.name||'新模型')+'</b>'
+    +caps.map(c=>'<span class="tag">'+esc(CFG_CAP_LABELS[c])+'</span>').join('')
+    +'<div class="cfg-model-actions"><select id="'+esc(dom)+'-testslot" title="选择需要测试的能力">'+slotOpts+'</select>'
+    +'<button class="ghost mini" onclick="cfgTestModel(\''+pid+'\',\''+mid+'\')">'+(caps.length===1&&['video','speech'].includes(caps[0])?'检查配置':'测试此能力')+'</button>'
+    +'<button class="ghost mini" onclick="cfgToggleModel(\''+pid+'\',\''+mid+'\')">'+(expanded?'收起':'编辑')+'</button>'
+    +'<button class="ghost mini" onclick="cfgDelModel(\''+pid+'\',\''+mid+'\')">删除</button></div></div>';
+  if(m.label&&m.label!==m.name)html+='<code>'+esc(m.name)+'</code>';
+  if(expanded){
+    const field=(key,label,value,placeholder)=>'<label for="'+esc(dom)+'-'+key+'">'+label+'</label><input id="'+esc(dom)+'-'+key+'" value="'+esc(String(value??''))+'" placeholder="'+placeholder+'" oninput="cfgDirty()"><em class="fh"></em>';
+    html+='<div class="cfg-model-edit"><div class="cfgp-grid">'
+      +field('name','模型名称',m.name,'服务商提供的准确模型名')+field('label','显示名称',m.label,'可留空，便于区分主备模型')+'</div>'
+      +'<div class="cfg-capabilities" style="margin-top:12px">'+Object.entries(CFG_CAP_LABELS).map(([cap,label])=>'<label><input type="checkbox" id="'+esc(dom)+'-cap-'+cap+'"'+(caps.includes(cap)?' checked':'')+' onchange="cfgModelChanged()">'+label+'</label>').join('')+'</div>';
+    if(caps.includes('chat')||caps.includes('route')){
+      html+='<details class="cfg-advanced"><summary>高级设置</summary><div class="cfgp-grid" style="margin-top:10px">';
+      if(caps.includes('chat'))html+='<label>推理强度</label><select id="'+esc(dom)+'-effort" onchange="cfgDirty()">'+CFG_EFFORTS.map(([v,l])=>'<option value="'+v+'"'+(v===(m.reasoning_effort||'')?' selected':'')+'>'+esc(l)+'</option>').join('')+'</select><em class="fh">仅用于通用对话</em>';
+      if(caps.includes('route'))html+='<label>意图识别接口</label><select id="'+esc(dom)+'-protocol" onchange="cfgDirty()">'+[['chat_completions','普通模型'],['systemone','Jev 决策模型']].map(([v,l])=>'<option value="'+v+'"'+(v===(m.route_protocol||'chat_completions')?' selected':'')+'>'+l+'</option>').join('')+'</select><em class="fh">Jev 仅限意图识别</em>'
+        +'<label>识别阈值</label><input id="'+esc(dom)+'-threshold" type="number" min="0" max="1" step="0.01" value="'+esc(String(m.route_threshold??''))+'" placeholder="使用协议默认值" oninput="cfgDirty()"><em class="fh">越高越保守，可留空</em>';
+      html+='</div></details>';
+    }
+    html+='</div>';
+  }
+  return html+'<div class="cfg-model-test" id="'+esc(dom)+'-result">'+esc(result)+'</div></div>';
+}
+function cfgProvRow(p){
+  const id=esc(p.id),models=cfgEnsureModels(p),hint=cfgHintFor(p);
+  const caps=[...new Set(models.flatMap(m=>m.capabilities))];
+  const key=cfgKeys[p.id]!==undefined?cfgKeys[p.id]:(p.api_key||'');
+  return '<div class="cfgp" data-provider="'+id+'"><div class="cfgp-h">'
+    +'<span class="dot '+(p.has_key?'configured':'warn')+'" title="密钥是否已配置；各模型需要分别测试"></span>'
+    +'<b>'+esc(p.label||p.id)+'</b>'+(p.builtin?'<span class="tag">内置</span>':'')
+    +caps.map(c=>'<span class="tag">'+esc(CFG_CAP_LABELS[c])+'</span>').join('')
+    +'<span class="hint">'+models.length+' 个模型 · '+esc(cfgKeyState(p))+'</span><span style="flex:1"></span>'
+    +(p.builtin?'':'<button class="ghost mini" onclick="cfgDelProv(\''+id+'\')">删除来源</button>')+'</div>'
+    +'<div class="cfgp-body"><details class="cfg-connection"'+(!p.base_url?' open':'')+'><summary>连接设置 · 地址与密钥</summary>'
+    +(hint?'<p class="hint">'+esc(hint)+'</p>':'')+'<div class="cfgp-grid">'
+    +cfgField(id,'label','来源名称',p.label||'','便于识别的名称')+cfgField(id,'url','接口地址',p.base_url||'','服务商提供的接口根地址')
+    +'<span class="cfgp-key"><label>密钥</label><input id="cfgp-'+id+'-key" type="password" autocomplete="new-password" value="'+esc(key)+'" placeholder="'+esc(cfgKeyPlaceholder(p))+'" oninput="cfgDirty()">'
+    +'<button class="ghost mini" onclick="cfgTogglePw(\''+id+'\',this)">显示</button><button class="ghost mini" onclick="cfgKeyClear(\''+id+'\')">清除</button></span></div></details>'
+    +models.map(m=>cfgModelRow(p,m)).join('')
+    +(!models.length?'<p class="hint">尚未添加模型；也可仅配置密钥用于网页检索。</p>':'')
+    +'<button class="ghost mini" style="margin-top:12px" onclick="cfgAddModel(\''+id+'\')">＋ 添加模型</button></div></div>';
+}
+function cfgCollect(){
+  if(!cfgData)return;
+  for(const p of cfgData.config.providers||[]){
+    const el=k=>document.getElementById('cfgp-'+p.id+'-'+k);
+    if(el('label'))p.label=el('label').value.trim();
+    if(el('url'))p.base_url=el('url').value.trim();
+    if(el('key'))cfgKeys[p.id]=el('key').value;
+    for(const m of cfgEnsureModels(p)){
+      const g=k=>document.getElementById('cfgm-'+p.id+'~'+m.id+'-'+k);
+      if(!g('name'))continue;
+      m.name=g('name').value.trim();m.label=g('label').value.trim();
+      m.capabilities=Object.keys(CFG_CAP_LABELS).filter(c=>g('cap-'+c)?.checked);
+      m.reasoning_effort=m.capabilities.includes('chat')?(g('effort')?.value||''):'';
+      m.route_protocol=m.capabilities.includes('route')?(g('protocol')?.value||'chat_completions'):'chat_completions';
+      const threshold=g('threshold');
+      m.route_threshold=m.capabilities.includes('route')&&threshold?(threshold.validity.badInput?'invalid':(threshold.value===''?null:Number(threshold.value))):null;
+    }
+  }
+  const enabled=$('#cfgWebEnabled'),provider=$('#cfgWebProvider');
+  if(enabled&&provider)cfgData.config.web_search={enabled:enabled.checked,provider_id:provider.value};
+}
+async function cfgTestModel(pid,mid){
+  const ref=pid+'~'+mid,dom='cfgm-'+ref;
+  const slot=document.getElementById(dom+'-testslot')?.value;
+  if(!slot)return;
+  cfgProbeSlots[ref]=slot;
+  if(!await cfgSave(true))return;
+  const revision=cfgRevision;
+  const say=value=>{const node=document.getElementById(dom+'-result');if(node)node.textContent=value;};
+  say('正在测试 '+CFG_CAP_LABELS[slot]+'……');
+  let data;
+  try{
+    const r=await fetch('/api/modelconfig/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider_id:pid,model_id:mid,slot})});
+    data=await r.json();
+  }catch{data={ok:false,hint:'连接测试未完成，请重试'};}
+  if(revision!==cfgRevision)return;
+  let message=CFG_CAP_LABELS[slot]+'：';
+  if(data.skip)message+='配置已保存，尚未实测。'+(data.hint||'');
+  else if(data.ok){message+='接口已验证 · '+(data.ms||0)+' ms';if(data.effort&&!data.effort.accepted)message+='；此模型不接受当前推理强度，请改为留空';}
+  else message+='未通过。'+(data.hint||data.detail||data.error||'请求失败');
+  cfgTests[ref+'|'+slot]=message;
+  say(Object.entries(cfgTests).filter(([k])=>k.startsWith(ref+'|')).map(([,v])=>v).join('\n'));
+}
 // 组装提交体 —— key 的三态就在这里落地（见文件头那个 ★ 注释）
 function cfgPayload(){
   cfgCollect();
@@ -2308,7 +2620,7 @@ function cfgPayload(){
              //   滤掉，而 _normalize 对"键不存在"的家会回填内置默认 —— 于是用户
              //   **主动改成「留空」会被静默改回 low**，他下次打开发现又变回去了。
              //   （与 api_key 的三态不同：这里空串本身就是他要的值，不是"没填"。）
-             reasoning_effort:(p.reasoning_effort||"")};
+             reasoning_effort:(p.reasoning_effort||""),models:cfgEnsureModels(p)};
     // ★ 只有**动过**才提交 api_key：原样不动就不带这个字段（服务端语义 = 不改动）。
     //   少了这个判断的话，框里预填的 src/.env 密钥会被一次"什么都没改"的保存
     //   复制进库，"来自 src/.env" 的来源标记就没了（用户再也分不清是抄来的还是自己填的）。
@@ -2317,7 +2629,7 @@ function cfgPayload(){
     const now=(cfgKeys[p.id]!==undefined ? cfgKeys[p.id] : orig);
     if(now!==orig) o.api_key=now;
     return o;
-  }),slots:c.slots};
+  }),slots:c.slots,web_search:c.web_search||{enabled:true,provider_id:'deepseek'}};
 }
 
 function cfgMove(slot,i,d){
@@ -2329,14 +2641,12 @@ function cfgMove(slot,i,d){
 }
 function cfgDrop(slot,i){ cfgCollect(); cfgData.config.slots[slot].splice(i,1); cfgRender(); }
 function cfgAddTo(slot,pid){ if(pid){ cfgCollect(); cfgData.config.slots[slot].push(pid); cfgRender(); } }
-function cfgApplyTo(from,to){
-  if(to){ cfgCollect(); cfgData.config.slots[to]=cfgData.config.slots[from].slice(); cfgRender(); }
-}
 function cfgDelProv(pid){
   cfgCollect();
   const c=cfgData.config;
   c.providers=c.providers.filter(p=>p.id!==pid);                 // 服务端也会级联清链
-  Object.keys(c.slots||{}).forEach(k=>{ c.slots[k]=c.slots[k].filter(x=>x!==pid); });
+  if(c.web_search?.provider_id===pid)c.web_search.provider_id='';
+  Object.keys(c.slots||{}).forEach(k=>{ c.slots[k]=c.slots[k].filter(x=>x!==pid&&!x.startsWith(pid+'~')); });
   cfgRender();
 }
 // 「＋ 添加模型来源」：按模板加一行**预填好**的（接口地址、模型名都替你抄好了），
@@ -2360,11 +2670,11 @@ function cfgAddPreset(kind){
     key_source:(pre.api_key?"db":"none")});
   if(pre.api_key) cfgKeys[id]=pre.api_key;       // 本地 Ollama：密钥预填好，它不校验
   cfgSay('<span class="res ok">已添加「'+esc(pre.label)
-    +'」</span><span class="hint">　填入密钥即可保存；如需启用，请在 ① 中选中它。</span>');
+    +'」</span><span class="hint">　填入密钥即可保存；如需启用，请到「功能分配」中选择模型。</span>');
   cfgRender();
 }
 function cfgKeyClear(pid){
-  cfgKeys[pid]="";                                 // 提交时是空串 = 清掉
+  cfgDirty();cfgKeys[pid]="";                                 // 提交时是空串 = 清掉
   const el=document.getElementById("cfgp-"+pid+"-key");
   if(el){ el.value=""; el.type="password";   // 顺手收回明文显示
           el.placeholder="留空保存后，此来源将不使用密钥"; }
@@ -2384,46 +2694,10 @@ async function cfgSave(silent){
   return true;
 }
 
-async function cfgTest(pid){
-  // ★ 每次都用 id **现取**元素：cfgSave() 内部会重绘整块，事先抓到的那个节点会被
-  //   换成新的，往它上面写结果等于写进一个已经不在页面上的孤儿元素 —— 用户看到的
-  //   就是"点了按钮毫无反应"。（这个 bug 真的发生过，别再改回先取后用。）
-  const say=html=>{ const el=document.getElementById("cfgt-"+pid); if(el) el.innerHTML=html; };
-  say('<span class="hint">正在测试……</span>');
-  if(!await cfgSave(true)){ say('<span class="res bad">请先修正标记的问题</span>'); return; }
-  say('<span class="hint">正在测试……</span>');
-  let d={};
-  try{
-    const r=await fetch("/api/modelconfig/test",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({provider_id:pid})});
-    d=await r.json().catch(()=>({}));
-  }catch(e){ d={ok:false,hint:"请求未发出，请确认服务是否正在运行"}; }
-  // 三种结果。★ 中间那种（skip）是**中性提示**，不是失败：视频模型不是对话模型，
-  //   拿对话接口去打它必然 400 —— 显示成红叉会让用户去改一个本来正确的模型名。
-  let html;
-  if(d.skip){
-    html='<span class="hint">'+esc(d.hint||"这一行不支持试连")+'</span>';
-  }else if(d.ok){
-    html='<span class="res ok">✓ 连接正常 · '+(d.ms||0)+' ms</span>';
-    // 「推理强度」非空时，服务端会**多打一趟**单独验它（见 app/server.py 的测试端点）。
-    // 单独报是为了让用户分得清"地址填错了"和"这个参数对端不收" —— 混在一起显示成
-    // 红叉，他会去改一个本来就正确的地址（同上面 skip 那条的取舍）。
-    if(d.effort){
-      html += d.effort.accepted
-        ? '<span class="hint"> · 推理强度 '+esc(d.effort.value)+' 已生效</span>'
-        : '<span class="res bad">✕ 此来源不接受「推理强度 '+esc(d.effort.value)
-          +'」，请把这一栏改回「留空」</span>';
-    }
-  }else{
-    html='<span class="res bad">✕ 连接失败：'+esc(d.hint||d.detail||d.error||"未知原因")+'</span>';
-  }
-  say(html);
-}
 
 async function cfgReset(){
   cfgData=await (await fetch("/api/modelconfig",{method:"DELETE"})).json();
-  cfgKeys={}; cfgRender();
+  cfgKeys={};cfgDirty();cfgRender();
   cfgSay('<span class="res ok">已恢复默认配置</span>');
 }
 

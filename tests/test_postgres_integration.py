@@ -35,6 +35,7 @@ _EXPECTED_TABLES = {
     "checkpoints", "model_configs", "mcp_servers", "ref_links",
     "interviews", "interview_recordings", "interview_questions",
     "interview_question_spans", "interview_reviews", "interview_actions",
+    "station_documents", "station_attachment_turns", "station_traces", "station_trace_spans",
 }
 _EXPECTED_INDEXES = {
     "idx_threads_user", "idx_jobs_user", "idx_states_user",
@@ -42,6 +43,7 @@ _EXPECTED_INDEXES = {
     "idx_interviews_user_updated", "idx_recordings_interview_sequence",
     "idx_questions_interview_sequence", "idx_question_spans_question",
     "idx_reviews_question_version", "idx_actions_interview_status_updated",
+    "idx_traces_thread", "idx_trace_spans_trace",
 }
 
 
