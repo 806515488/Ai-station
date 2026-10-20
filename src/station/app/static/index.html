@@ -524,13 +524,16 @@
   #taskList{padding:14px 16px;overflow:auto;flex:1;min-height:0}
   .task-card{border:1px solid var(--line);background:var(--panel2);border-radius:11px;padding:13px;margin-bottom:12px}
   .task-title{display:flex;gap:9px;align-items:flex-start}.task-title b{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13px}
-  .task-badge{flex:none;font-size:11px;color:#9fb6d8}.task-badge[data-state="done"]{color:#8bc7ab}
-  .task-badge[data-state="failed"],.task-badge[data-state="interrupted"],.task-badge[data-state="partial"]{color:var(--warn)}
+  .task-badge{flex:none;max-width:45%;text-align:right;font-size:11px;color:#9fb6d8}.task-badge[data-state="done"]{color:#8bc7ab}
+  .task-badge[data-state="failed"],.task-badge[data-state="interrupted"],.task-badge[data-state="partial"],.task-badge[data-state="waiting_reply"],.task-badge[data-state="unknown"]{color:var(--warn)}
   .task-meta{font-size:11px;color:var(--dim);line-height:1.7;margin-top:7px;overflow-wrap:anywhere}
-  .task-phase{font-size:12px;margin:9px 0;line-height:1.7}.task-phase span{color:var(--dim);margin-right:7px}
+  .task-description{font-size:12px;color:var(--dim);margin:9px 0;line-height:1.7;overflow-wrap:anywhere}
   .task-card progress{width:100%;height:5px;accent-color:var(--acc)}
   .task-hint{font-size:12px;color:var(--warn);margin:9px 0;line-height:1.7;overflow-wrap:anywhere}
   .task-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}.task-actions button{font-size:11px}
+  .task-more{border-top:1px solid var(--line);margin-top:11px;padding-top:8px}
+  .task-more>summary{cursor:pointer;color:var(--dim);font-size:11px;width:fit-content}
+  .task-more>summary:focus-visible{outline:2px solid var(--acc);outline-offset:3px;border-radius:3px}
   .task-files{display:flex;gap:5px;flex-direction:column;margin-top:8px}.task-files a{font-size:12px;overflow-wrap:anywhere}
   .task-empty{font-size:13px;color:var(--dim);padding:30px 8px;text-align:center}
   .task-foot{padding:9px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
@@ -542,7 +545,7 @@
   <div class="task-head"><b>我的任务</b><button class="ghost mini" onclick="openTasks()">列表</button>
     <button class="ghost mini" onclick="refreshTasks()">刷新</button><button class="ghost mini" onclick="closeTasks()" aria-label="关闭我的任务">✕</button></div>
   <div class="task-tabs" id="taskTabs"></div><div id="taskList"></div>
-  <div class="task-foot">处理结果与回答状态分别显示。恢复操作以原任务的可用结果为准。</div>
+  <div class="task-foot">这里显示任务当前进展。重新回答会复用已有解析结果，重新解析请展开更多操作。</div>
 </section>
 <div id="traceScrim" style="display:none" onclick="closeTrace()"></div>
 <section id="tracePanel" style="display:none" role="dialog" aria-modal="true" aria-label="执行详情">
@@ -1168,7 +1171,7 @@ async function watchDocumentTurn(turnId,targetThread){
             ${d.error?`<div class="hint">${esc(d.error)}</div>`:""}</div>`;
         }).join("");
         const retry=["failed","interrupted"].includes(data.state)&&data.thread_id?
-          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true,replyOnly:true})">继续回答（保留解析）</button>`:"";
+          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true,replyOnly:true})">重新回答（复用解析）</button>`:"";
         const cancel=data.state==="waiting_parse"?
           `<button class="ghost mini" onclick="cancelDocumentTurn('${turnId}')">取消处理</button>`:"";
         node.innerHTML=rows+`<div class="hint">${esc(data.job?.message||documentState(data.state))}</div>`+
@@ -2173,8 +2176,51 @@ let taskEpoch=0,taskTimer=null,taskCategory='all',taskFocusId='',taskCursor='',t
 const taskActionKeys=new Map(),taskBusy=new Set();
 const TASK_STATES={queued:'排队中',running:'处理中',cancelling:'正在停止',done:'已完成',failed:'处理失败',
   partial:'部分完成',interrupted:'已中断',unknown:'状态待核验',cancelled:'已取消',waiting_reply:'等待继续回答'};
-const REPLY_STATES={none:'无独立回答步骤',waiting_parse:'等待正文',ready:'正文可用，等待回答',running_agent:'正在回答',
-  done:'已回答',failed:'回答失败',interrupted:'回答中断',cancelled:'已取消'};
+// 后端仍分别记录解析与回答，卡片只呈现用户当前关心的阶段，不改变任务状态或允许动作。
+function taskPresentation(t){
+  const state=t.processing_state,reply=t.reply_state,doc=t.type==='station-documents';
+  const kind={video:['视频','视频生成中','视频已生成'],archive:['档案','正在识别档案','档案识别完成'],
+    'interview-coach':['音频','正在转写音频','转写已完成'],'station-documents':['文档','正在解析文档','文档已解析']}[t.type]||['任务','正在处理','已完成'];
+  let label=TASK_STATES[state]||'状态待核验',summary='',tone=state;
+  const busy=['queued','running','cancelling'].includes(state)||(doc&&reply==='running_agent');
+  if(state==='queued'){label=doc?'等待解析文档':kind[0]+'任务排队中';summary='任务已提交，等待开始处理。';}
+  else if(state==='running'){label=kind[1];summary=doc?'正在提取正文并保存解析结果。':'任务正在执行，结果会保存在这里。';}
+  else if(state==='cancelling'){label='正在停止';summary='停止请求已提交，已有结果会保留。';}
+  else if(state==='failed'){label=({'station-documents':'文档解析失败',video:'视频生成失败',archive:'档案识别失败','interview-coach':'音频转写失败'})[t.type]||'任务失败';summary=doc?'请查看处理记录，可在更多操作中重新解析。':'请查看处理记录或返回原会话核对。';}
+  else if(state==='partial'){label='部分解析完成';summary='部分文档未完成解析，可用结果已保留，请核对处理报告。';}
+  else if(state==='interrupted'){label=kind[0]+'任务已中断';summary='任务执行已中断，已有结果会保留。';}
+  else if(state==='unknown'){label='执行状态待核验';summary='暂时无法确认任务是否仍在运行。已有结果保留，可返回原会话核对。';}
+  else if(state==='cancelled'){label='已停止处理';summary='已停止本地处理或等待，已有结果会保留。';}
+  else if(state==='done'){
+    label=kind[2];summary=t.type==='archive'?'识别结果已保存，可返回原会话核对并继续出件。':'结果已保存，可打开下方文件查看。';
+    if(doc){
+      if(reply==='running_agent'){label='正在生成回答';summary='文档已解析，正在根据你的问题生成回答。';tone='running';}
+      else if(reply==='failed'||reply==='interrupted'){
+        label='回答未完成';tone='waiting_reply';summary=t.body_available?'文档解析结果已保存，重新回答会复用这些内容，无需重新解析。':'处理报告已保存，暂无可用正文，可重新生成处理说明。';
+      }else if(reply==='ready'){
+        label='文档已解析';tone='waiting_reply';summary=t.body_available?'解析结果已保存，可生成回答，也可先查看解析结果。':'处理报告已保存，暂无可用正文，可生成处理说明。';
+      }else if(reply==='done'){label='已完成';summary='文档解析和回答均已完成，可查看回答及解析结果。';}
+      else if(reply==='cancelled'){label='回答已取消';summary='文档解析结果已保存，可先查看解析结果。';}
+    }
+  }
+  if(doc&&state==='partial'&&reply==='running_agent')summary+=' 正在根据可用内容生成回答。';
+  if(doc&&state==='partial'&&reply==='done')summary+=' 回答已生成，可返回原会话查看。';
+  if(doc&&state==='partial'&&['failed','interrupted'].includes(reply))summary+=' 回答尚未完成，可复用已有内容重新回答。';
+  // 远端可能已经受理的任务必须说明核验/取回，不能让“失败”文案诱导用户重复提交。
+  if(!busy&&state!=='done'&&t.phase==='submitting'){
+    label='提交结果待核验';tone='unknown';summary='尚未确认服务平台是否受理，请先核对原会话或平台记录，避免重复提交。';
+  }else if(!busy&&(t.actions||[]).some(a=>a.id==='resume_remote')){
+    label=t.phase==='download'?(t.type==='video'?'视频待取回':'结果待取回'):'本地等待已中断';tone='interrupted';
+    summary='原任务编号已保留，可继续查询并取回结果，不会重新创建任务。';
+  }
+  if(t.successor_id)summary+=' 已创建后续任务，可在更多操作中查看。';
+  return {label,summary,tone,busy};
+}
+function taskActionLabel(t,a){
+  if(a.id==='continue_answer')return !t.body_available?'生成处理说明':(['failed','interrupted'].includes(t.reply_state)?'重新回答':'生成回答');
+  if(a.id==='resume_remote')return '继续取回结果';
+  return a.label;
+}
 function closeTasks(){taskEpoch++;clearTimeout(taskTimer);$('#taskPanel').style.display='none';$('#taskScrim').style.display='none';taskFocus?.focus();}
 function openTasks(id=''){
   if($('#taskPanel').style.display==='none')taskFocus=document.activeElement;
@@ -2198,24 +2244,34 @@ async function refreshTasks(append=false){
   }catch(e){if(epoch===taskEpoch)$('#taskList').textContent=String(e.message||'读取失败');}
 }
 function renderTasks(){
+  // 自动刷新不能每 2.5 秒收起菜单，或把键盘焦点从正在操作的按钮移走。
+  const expanded=new Set([...$('#taskList').querySelectorAll('.task-more[open]')].map(n=>n.closest('[data-task]').dataset.task));
+  const focused=document.activeElement,focusId=focused?.closest('#taskList [data-task]')?.dataset.task;
+  const focusAttr=['data-task-action','data-task-thread','data-task-trace','data-task-next'].find(a=>focused?.hasAttribute(a));
+  const focusValue=focusAttr?focused.getAttribute(focusAttr):null;
   $('#taskTabs').innerHTML=[['all','全部'],['active','进行中'],['attention','需要处理'],['completed','已完成']].map(([key,label])=>
     '<button class="ghost mini" data-task-filter="'+key+'" aria-pressed="'+String(taskCategory===key&&!taskFocusId)+'">'+label+'</button>').join('');
   $('#taskTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>taskFilter(b.dataset.taskFilter));
   const render=t=>{
-    const working=['queued','running','cancelling'].includes(t.processing_state);
+    const view=taskPresentation(t),actions=t.actions||[],primary=actions.find(a=>['continue_answer','resume_remote'].includes(a.id));
+    const visible=actions.filter(a=>a===primary||a.id==='cancel'),more=actions.filter(a=>!visible.includes(a));
+    const actionButton=(a,main=false)=>'<button class="'+(main?'mini':'ghost mini')+'" data-task-action="'+esc(a.id)+'" title="'+esc(a.label)+'"'+(taskBusy.has(t.id)?' disabled':'')+'>'+esc(taskActionLabel(t,a))+'</button>';
     const value=['archive','station-documents'].includes(t.type)&&t.processing_state==='running'?' value="'+Math.min(100,Math.max(0,t.progress||0))+'"':'';
-    return '<article class="task-card" data-task="'+esc(t.id)+'"><div class="task-title"><b>'+esc(t.title)+'</b><span class="task-badge" data-state="'+esc(t.status)+'">'+esc(TASK_STATES[t.status]||t.status)+'</span></div>'
-      +'<div class="task-meta">'+esc(fmtWhen(t.created))+' · 任务 '+esc(t.id)+'</div>'
-      +'<div class="task-phase"><span>处理</span>'+esc(TASK_STATES[t.processing_state]||t.processing_state)+'<br><span>回答</span>'+esc(t.reply_state==='ready'&&!t.body_available?'处理报告已保留，暂无可用正文':REPLY_STATES[t.reply_state]||t.reply_state)+'</div>'
-      +(working?'<progress max="100"'+value+'></progress>':'')
-      +(t.message?'<div class="task-meta">'+esc(t.message)+'</div>':'')
-      +(t.hint?'<p class="task-hint">'+esc(t.hint)+'</p>':'')
-      +'<div class="task-files">'+(t.artifacts||[]).map(f=>'<a target="_blank" rel="noopener" href="'+esc(f.url)+'">↗ '+esc(f.name)+'</a>').join('')+'</div>'
-      +'<div class="task-actions">'+(t.actions||[]).map(a=>'<button class="'+(['continue_answer','resume_remote'].includes(a.id)?'mini':'ghost mini')+'" data-task-action="'+esc(a.id)+'"'+(taskBusy.has(t.id)?' disabled':'')+'>'+esc(a.label)+'</button>').join('')
-      +(t.thread_id?'<button class="ghost mini" data-task-thread="'+esc(t.thread_id)+'">返回原会话</button>':'')
+    return '<article class="task-card" data-task="'+esc(t.id)+'"><div class="task-title"><b>'+esc(t.title)+'</b><span class="task-badge" data-state="'+esc(view.tone)+'">'+esc(view.label)+'</span></div>'
+      +'<div class="task-meta">'+esc(fmtWhen(t.created))+'</div>'
+      +'<p class="task-description">'+esc(view.summary)+'</p>'
+      +(view.busy?'<progress max="100" aria-label="'+esc(view.label)+'"'+value+'></progress>':'')
+      +(view.busy&&t.message?'<div class="task-meta">'+esc(t.message)+'</div>':'')
+      +((t.artifacts||[]).length?'<div class="task-files">'+t.artifacts.map(f=>'<a target="_blank" rel="noopener" href="'+esc(f.url)+'">↗ '+esc(f.name)+'</a>').join('')+'</div>':'')
+      +(visible.length||t.thread_id?'<div class="task-actions">'+visible.map(a=>actionButton(a,a===primary)).join('')
+        +(t.thread_id?'<button class="'+(!primary&&t.reply_state==='done'?'mini':'ghost mini')+'" data-task-thread="'+esc(t.thread_id)+'">'+(t.reply_state==='done'?'查看回答':'返回原会话')+'</button>':'')+'</div>':'')
+      +'<details class="task-more"'+(expanded.has(t.id)?' open':'')+'><summary>更多操作与记录</summary><div class="task-actions">'+more.map(a=>actionButton(a)).join('')
       +(t.trace_id?'<button class="ghost mini" data-task-trace="'+esc(t.trace_id)+'">执行详情</button>':'')
-      +(t.successor_id?'<button class="ghost mini" data-task-next="'+esc(t.successor_id)+'">查看接续任务 →</button>':'')
-      +(t.parent_job_id?'<button class="ghost mini" data-task-next="'+esc(t.parent_job_id)+'">← 原任务</button>':'')+'</div><div class="task-hint task-feedback" aria-live="polite"></div></article>';
+      +(t.successor_id?'<button class="ghost mini" data-task-next="'+esc(t.successor_id)+'">查看后续任务 →</button>':'')
+      +(t.parent_job_id?'<button class="ghost mini" data-task-next="'+esc(t.parent_job_id)+'">查看原任务</button>':'')+'</div>'
+      +'<div class="task-meta">任务 '+esc(t.id)+'</div>'
+      +(!view.busy&&t.message?'<div class="task-meta">'+esc(t.message)+'</div>':'')
+      +(t.hint?'<p class="task-hint">'+esc(t.hint)+'</p>':'')+'</details><div class="task-hint task-feedback" aria-live="polite"></div></article>';
   };
   $('#taskList').innerHTML=taskRows.map(render).join('')||(taskCursor?'<p class="task-empty">当前页暂无匹配任务，可继续加载。</p>':'<p class="task-empty">暂无匹配任务</p>');
   if(taskCursor)$('#taskList').insertAdjacentHTML('beforeend','<button class="ghost mini" id="taskMore">加载更多任务</button>');
@@ -2224,6 +2280,11 @@ function renderTasks(){
   $('#taskList').querySelectorAll('[data-task-thread]').forEach(b=>b.onclick=()=>{closeTasks();openThread(b.dataset.taskThread);});
   $('#taskList').querySelectorAll('[data-task-trace]').forEach(b=>b.onclick=()=>openTrace(b.dataset.taskTrace));
   $('#taskList').querySelectorAll('[data-task-next]').forEach(b=>b.onclick=()=>openTasks(b.dataset.taskNext));
+  if(focusId){
+    const card=[...$('#taskList').querySelectorAll('[data-task]')].find(n=>n.dataset.task===focusId);
+    const next=focusAttr?[...(card?.querySelectorAll('['+focusAttr+']')||[])].find(n=>n.getAttribute(focusAttr)===focusValue):card?.querySelector('summary');
+    next?.focus({preventScroll:true});
+  }
 }
 async function taskAction(id,action,button){
   if(taskBusy.has(id))return;taskBusy.add(id);clearTimeout(taskTimer);
@@ -2244,7 +2305,7 @@ document.addEventListener('keydown',event=>{
   if($('#taskPanel').style.display==='none'||$('#tracePanel').style.display!=='none')return;
   if(event.key==='Escape'){closeTasks();event.preventDefault();}
   if(event.key==='Tab'){
-    const nodes=[...$('#taskPanel').querySelectorAll('button,a')].filter(n=>n.getClientRects().length&&!n.disabled),first=nodes[0],last=nodes.at(-1);
+    const nodes=[...$('#taskPanel').querySelectorAll('button,a,summary')].filter(n=>n.getClientRects().length&&!n.disabled&&(!n.closest('details:not([open])')||n.tagName==='SUMMARY')),first=nodes[0],last=nodes.at(-1);
     if(event.shiftKey&&document.activeElement===first){last?.focus();event.preventDefault();}
     else if(!event.shiftKey&&document.activeElement===last){first?.focus();event.preventDefault();}
   }
