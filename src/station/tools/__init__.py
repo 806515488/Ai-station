@@ -2,7 +2,7 @@
 
 ## 为什么要有"全局工具"这一层
 
-本宿主的既定原则是「**技能工具不是全局的**」（见 app/unified.py）：路由阶段只读
+本宿主的既定原则是「**技能工具不是全局的**」（见 chat/catalog.py）：路由阶段只读
 技能的名称/描述，命中谁才把谁的工具给模型。这条原则是对的 —— 不然每个技能的工具
 都往上下文里塞，模型会被一堆用不上的工具搞糊涂。
 
@@ -30,7 +30,7 @@ tools 是空的）。于是"看下 docs/status.md"、"把这段记下来"、"我
 - `/api/station/file` 只读端点也删了（它只为 `show` 推图存在）—— 少一条对外可读仓库的口子
 - `STATION_FS_WRITE=0` 这个"公网部署一键关写"的开关**从这一层挪走了**（这儿没有东西可关）；
   但"写仓库里的文件"这件事后来又在技能里出现（archive 的口径文件），所以开关**没作废**
-  —— 它现在挂在那个唯一写口上（`archive.service.kouju.write_text`）。公网实例照旧配个
+  —— 它现在挂在那个唯一写口上（`archive_core.service.kouju.write_text`）。公网实例照旧配个
   环境变量就能彻底关写
 - 全局工具从 9 个降到 4 个，每轮省下约 0.8k token 的 schema
 
@@ -88,7 +88,7 @@ def find(name: str):
     """按**完整名**（`station.read`）找一个全局工具；没有返回 None。
 
     宿主的批准补执行要用它：危险工具挂起后，下一轮要按名字把它找回来执行
-    （见 app/server.py 的 `_skill_for_tool`）。
+    （见 chat/routing.py 的 agent_for_tool）。
     """
     for t in GLOBAL_TOOLS:
         if t.name == name:

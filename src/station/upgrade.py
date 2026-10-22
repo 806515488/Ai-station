@@ -1,9 +1,13 @@
 """显式升级 PostgreSQL schema；不由 Web 请求自动触发。"""
 from __future__ import annotations
 
+from station.persistence.backends import postgres as postgres_backend
+from station.persistence.schema import postgres as postgres_schema
+
+
 import argparse
 
-from station import config, db
+from station import config
 
 
 def main() -> None:
@@ -15,9 +19,9 @@ def main() -> None:
     url = args.database_url or config.database_url()
     if not url:
         parser.error("缺少 PostgreSQL URL：设置 STATION_DATABASE_URL 或传 --database-url")
-    c = db.connect_postgres(url)
+    c = postgres_backend.connect_postgres(url)
     try:
-        result = db.upgrade_postgres_schema(c)
+        result = postgres_schema.upgrade_postgres_schema(c)
     finally:
         c.close()
     print(f"PostgreSQL schema：{result}")

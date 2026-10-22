@@ -1,44 +1,37 @@
-# ── 敏感信息 ──
-archive_tool/.env
-.env
+# ── 凭据与私钥 ──
+.env*
+*.env
+*.env.*
+!/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
 
-# ── 打包产物（PyInstaller build/dist）──
-archive_tool/build/
-archive_tool/dist/
-archive_tool/__pycache__/
-archive_tool/core/__pycache__/
+# ── Python 缓存 ──
 __pycache__/
 *.pyc
 
 # ── 根目录大体积测试图片（约300MB）──
-*.jpg
-*.png
+/*.jpg
+/*.png
 
 # ── IDE ──
 .idea/
 
-# ── 运行时输出 ──
-archive_tool/projects/
-
-# ── Web 服务运行时数据（不提交） ──
-server/data/
-
 # ── 部署/打包产物（不提交） ──
 *.tar.gz
-archive_tool/dist_win7/
-archive_tool/python-3.8.10-amd64.exe
-archive_tool/test_photos.zip
-下载_*/
 .playwright-mcp/
-
-# ── 证书/密钥（本地生成） ──
-server/key.pem
-server/cert.pem
 
 # ── 运行时/样例/密钥 ──
 data/
 samples/
-src/.env
 .pytest_cache/
 
 # ── Python 构建/测试产物（开源通用） ──

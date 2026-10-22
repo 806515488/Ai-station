@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+from station.persistence.repositories import attachments as attachment_records
+
+
 import json
 import os
 import queue
@@ -14,7 +17,7 @@ import threading
 import time
 import uuid
 
-from station import config, db
+from station import config
 from station.documents import loaders, settings, storage
 
 
@@ -30,7 +33,7 @@ def publish(document: dict, run_id: str, manifest_name: str, state: str) -> dict
     for shard_group in [value["parsed"]["shards"], *(x["shards"] for x in value["chunk_sets"])]:
         for _ in storage.records(folder, shard_group):
             pass
-    current = db.document_get(document["id"], document["owner_id"])
+    current = attachment_records.document_get(document["id"], document["owner_id"])
     runs = dict(current.get("runs", {}))
     runs[run_id] = {"id": run_id, "manifest": manifest_name, "state": state,
                    "parse_status": value["parsed"]["status"],
@@ -39,7 +42,7 @@ def publish(document: dict, run_id: str, manifest_name: str, state: str) -> dict
                    "chunks": sum(x["chunk_count"] for x in value["chunk_sets"]),
                    "parse_fingerprint": value["processing"]["parse_fingerprint"],
                    "parsed_snapshot_id": value["parsed"]["snapshot_id"], "updated": time.time()}
-    return db.document_update(document["id"], document["owner_id"],
+    return attachment_records.document_update(document["id"], document["owner_id"],
                               {"runs": runs, "latest_run": run_id,
                                "status": "failed" if value["quality"]["status"] == "unusable" else state,
                                "error": "没有可用正文，请核对文件或接入 OCR" if value["quality"]["status"] == "unusable" else ""})
@@ -64,7 +67,7 @@ def stop(process):
 
 def cache_for(document: dict, cfg: dict) -> dict | None:
     parse_fp, _ = settings.fingerprints(document["sha256"], cfg, loaders.versions())
-    for candidate in db.document_list(document["owner_id"], 1000):
+    for candidate in attachment_records.document_list(document["owner_id"], 1000):
         if candidate["sha256"] != document["sha256"]:
             continue
         for run in reversed(list(candidate.get("runs", {}).values())):
@@ -88,12 +91,12 @@ def run_one(document: dict, cfg: dict, turn: dict, cancel_check=None):
     payload = {"document": document, "run_id": run_id, "source": str(source), "folder": str(folder),
                "config": cfg, "cache": cache_for(document, cfg)}
     storage.atomic_json(folder / "request.json", payload)
-    refs = dict(db.attachment_turn_get(turn["id"], turn["owner_id"]).get("run_refs", {}))
+    refs = dict(attachment_records.attachment_turn_get(turn["id"], turn["owner_id"]).get("run_refs", {}))
     refs[document["id"]] = run_id
-    db.attachment_turn_update(turn["id"], turn["owner_id"], {"run_refs": refs})
+    attachment_records.attachment_turn_update(turn["id"], turn["owner_id"], {"run_refs": refs})
     runs = dict(document.get("runs", {}))
     runs[run_id] = {"id": run_id, "state": "parsing", "manifest": "", "updated": time.time()}
-    db.document_update(document["id"], document["owner_id"], {"status": "parsing", "runs": runs})
+    attachment_records.document_update(document["id"], document["owner_id"], {"status": "parsing", "runs": runs})
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1",
                DO_NOT_TRACK="1", LANGSMITH_TRACING="false")
     env["PYTHONPATH"] = os.pathsep.join([str(config.SRC), env.get("PYTHONPATH", "")])
@@ -123,7 +126,7 @@ def run_one(document: dict, cfg: dict, turn: dict, cancel_check=None):
         try:
             while process.poll() is None or reader.is_alive() or not messages.empty():
                 if cancel_check:cancel_check()
-                current_turn = db.attachment_turn_get(turn["id"], turn["owner_id"])
+                current_turn = attachment_records.attachment_turn_get(turn["id"], turn["owner_id"])
                 if current_turn["state"] == "cancelled":
                     raise ValueError("附件处理已取消")
                 if time.monotonic() > deadline:
@@ -164,14 +167,14 @@ def run_one(document: dict, cfg: dict, turn: dict, cancel_check=None):
 
 
 def build_runner(ctx, turn_id: str):
-    turn = db.attachment_turn_get(turn_id, ctx.user_id)
+    turn = attachment_records.attachment_turn_get(turn_id, ctx.user_id)
     if turn is None:
         raise ValueError("附件轮次不存在")
-    db.attachment_turn_update(turn_id, ctx.user_id, {"worker_boot_id": BOOT_ID})
+    attachment_records.attachment_turn_update(turn_id, ctx.user_id, {"worker_boot_id": BOOT_ID})
     for index, document_id in enumerate(turn["attachment_ids"], 1):
-        if db.attachment_turn_get(turn_id, ctx.user_id)["state"] == "cancelled":
+        if attachment_records.attachment_turn_get(turn_id, ctx.user_id)["state"] == "cancelled":
             raise ValueError("附件处理已取消")
-        document = db.document_get(document_id, ctx.user_id)
+        document = attachment_records.document_get(document_id, ctx.user_id)
         try:
             for event in run_one(document, turn["config"], turn, cancel_check=getattr(ctx,"task_cancel",None)):
                 if event.get("type") == "progress":
@@ -179,8 +182,8 @@ def build_runner(ctx, turn_id: str):
                            "message": f"{document['name']} · {event['message']}"}
         except Exception as e:
             # 一份失败不取消其余文件；parsed 若已发布，仍然保留可用正文。
-            current = db.document_get(document_id, ctx.user_id)
-            run_id = db.attachment_turn_get(turn_id, ctx.user_id).get("run_refs", {}).get(document_id)
+            current = attachment_records.document_get(document_id, ctx.user_id)
+            run_id = attachment_records.attachment_turn_get(turn_id, ctx.user_id).get("run_refs", {}).get(document_id)
             runs = dict(current.get("runs", {}))
             if run_id and runs.get(run_id, {}).get("manifest"):
                 runs[run_id]["chunk_status"] = "failed"
@@ -201,11 +204,11 @@ def build_runner(ctx, turn_id: str):
                           "resources": [storage.resource(document_id, run_id, folder, "quality.json")]}
                 storage.atomic_json(folder / "failed-manifest.json", failed)
                 publish(current, run_id, "failed-manifest.json", "failed")
-                runs = dict(db.document_get(document_id, ctx.user_id)["runs"])
-            db.document_update(document_id, ctx.user_id, {"status": "failed", "error": str(e)[:200], "runs": runs})
-            failures = dict(db.attachment_turn_get(turn_id, ctx.user_id).get("failures", {}))
+                runs = dict(attachment_records.document_get(document_id, ctx.user_id)["runs"])
+            attachment_records.document_update(document_id, ctx.user_id, {"status": "failed", "error": str(e)[:200], "runs": runs})
+            failures = dict(attachment_records.attachment_turn_get(turn_id, ctx.user_id).get("failures", {}))
             failures[document_id] = str(e)[:200]
-            db.attachment_turn_update(turn_id, ctx.user_id, {"failures": failures})
+            attachment_records.attachment_turn_update(turn_id, ctx.user_id, {"failures": failures})
             yield {"type": "log", "level": "warning", "text": f"{document['name']} · {str(e)[:200]}"}
         from station.documents.service import mark_ready
         mark_ready(turn_id, ctx.user_id)
@@ -219,3 +222,8 @@ class Executor:
     keys = []
     heavy = True
     build_runner = staticmethod(build_runner)
+
+    @property
+    def task_recovery(self):
+        from station.documents import tasks
+        return tasks

@@ -241,7 +241,7 @@ def _fake_results(query: str, n: int) -> str:
     """测试模式（STATION_FAKE=1）：不发任何网络请求，回一份固定的假结果。
 
     为什么需要它：离线单测要**真的把这个子进程起起来、真的走一遍 MCP 协议**，
-    但又不能联网（本仓的红线：单测不联网、不烧 key）。同 core/model.py 的 FakeModel。
+    但又不能联网（本仓的红线：单测不联网、不烧 key）。同 models/client.py 的 FakeModel。
     """
     lines = [f"【测试模式：没有真的联网搜索】关键词「{query}」"]
     for i in range(1, min(n, 3) + 1):

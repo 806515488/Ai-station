@@ -25,3 +25,10 @@ src/.env
 # Python 编译产物
 **/__pycache__/
 **/*.pyc
+
+# 本地依赖、验收临时目录和构建缓存由构建步骤重新准备，不进入构建上下文。
+.document-deps/
+.document-test-artifacts/
+build/
+dist/
+**/*.egg-info/

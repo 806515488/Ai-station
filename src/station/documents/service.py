@@ -1,12 +1,14 @@
 """附件用例：固定上传/轮次身份，提交现有任务，查询经过归属校验的结果。
 
 正文与原件只放数据卷；数据库保存有界元数据、已发布版本和会话关联。这里不直接
-使用数据库连接，所有读写通过 db.py 的带锁助手，保持宿主的并发约定。
+使用数据库裸连接，所有读写通过附件/任务仓库，保持统一作用域与并发约定。
 """
 from __future__ import annotations
 
+from station.persistence.repositories import attachments as attachment_records
+
+
 import hashlib
-import json
 import re
 import time
 import uuid
@@ -14,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from station import db
+
 from station.documents import loaders, settings, storage
 
 
@@ -48,7 +50,7 @@ async def upload(owner: str, file, client_key: str) -> dict:
                  "size": size, "sha256": digest.hexdigest(), "date": now.date().isoformat(),
                  "uploaded_at": now.isoformat(), "created": time.time(), "status": "uploaded",
                  "runs": {}, "latest_run": ""}
-        registered = db.document_register(value, client_key)
+        registered = attachment_records.document_register(value, client_key)
         if registered["sha256"] != value["sha256"] or registered["name"] != name:
             raise ValueError("此上传编号已用于另一份文件，请重新选择文件")
         if registered["id"] != document_id:
@@ -71,7 +73,7 @@ def submit(thread, message: str, attachment_ids: list[str], client_key: str) -> 
     if not ids or len(ids) > settings.limits()["max_files"]:
         raise ValueError("附件数量不符合限制")
     for document_id in ids:
-        if db.document_get(document_id, owner) is None:
+        if attachment_records.document_get(document_id, owner) is None:
             raise ValueError("附件不存在或不属于当前用户")
     cfg = settings.snapshot()
     cfg["components"] = loaders.versions()
@@ -80,7 +82,7 @@ def submit(thread, message: str, attachment_ids: list[str], client_key: str) -> 
               "config": cfg, "state": "waiting_parse", "created": time.time(),
               "job_id": uuid.uuid4().hex[:16], "run_refs": {}, "failures": {},
               "active_skill": (thread.meta or {}).get("active_skill", "")}
-    turn, created = db.attachment_turn_create(record)
+    turn, created = attachment_records.attachment_turn_create(record)
     if not created and (turn["message"] != message or turn["attachment_ids"] != ids):
         raise ValueError("此请求编号已用于不同的文字或附件")
     if not created and thread.id != turn["thread_id"]:
@@ -98,29 +100,29 @@ def submit(thread, message: str, attachment_ids: list[str], client_key: str) -> 
         thread.save()
     if created:
         from station.documents.pipeline import Executor
-        from station.jobs.manager import get_manager
+        from station.tasks.executor import get_manager
         get_manager().submit(Executor(), {"turn_id": turn["id"]}, owner, job_id=turn["job_id"])
     return turn, created
 
 
 def mark_ready(turn_id: str, owner: str) -> None:
-    turn = db.attachment_turn_get(turn_id, owner)
+    turn = attachment_records.attachment_turn_get(turn_id, owner)
     if not turn or turn["state"] != "waiting_parse":
         return
     for document_id in turn["attachment_ids"]:
         run_id = turn.get("run_refs", {}).get(document_id)
-        document = db.document_get(document_id, owner)
+        document = attachment_records.document_get(document_id, owner)
         run = document.get("runs", {}).get(run_id, {})
         if not run.get("manifest") and document_id not in turn.get("failures", {}):
             return
-    db.attachment_turn_update(turn_id, owner, {"state": "ready"}, expected=("waiting_parse",))
+    attachment_records.attachment_turn_update(turn_id, owner, {"state": "ready"}, expected=("waiting_parse",))
 
 
 def turn_view(turn: dict) -> dict:
     """返回前端需要的状态，不公开真实目录或整份后台配置。"""
     return {"id": turn["id"], "thread_id": turn["thread_id"], "job_id": turn["job_id"],
             "state": turn["state"], "error": turn.get("error", ""), "manual_reply":bool(turn.get("manual_reply")),
-            "documents": [view(db.document_get(x, turn["owner_id"]), False)
+            "documents": [view(attachment_records.document_get(x, turn["owner_id"]), False)
                           for x in turn["attachment_ids"]], "failures": turn.get("failures", {})}
 
 
@@ -177,24 +179,24 @@ def resource_path(document: dict, resource_id: str) -> tuple[Path, str]:
 def recover() -> None:
     """宿主单进程重启恢复纯本地解析；agent 外部副作用不自动重放。"""
     from station.documents.pipeline import BOOT_ID, Executor
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     manager = get_manager()
-    for turn in db.attachment_turn_list():
+    for turn in attachment_records.attachment_turn_list():
         from station.observability.recorder import instance_id
         if (turn["state"] == "running_agent" and turn.get("agent_boot_id") != BOOT_ID
                 and turn.get("agent_instance_id") == instance_id()):
-            db.attachment_turn_update(turn["id"], turn["owner_id"],
+            attachment_records.attachment_turn_update(turn["id"], turn["owner_id"],
                                       {"state": "interrupted", "error": "对话执行中断，请明确重试"})
         job = manager.get(turn["job_id"])
         if job and job["status"] in {"queued", "running", "interrupted"} and not manager.is_active(turn["job_id"]):
             if turn.get("worker_boot_id") != BOOT_ID and turn["state"] != "cancelled":
                 manager.resume(turn["job_id"], Executor())
-    for document in db.document_expired_drafts(time.time() - 7 * 86400):
+    for document in attachment_records.document_expired_drafts(time.time() - 7 * 86400):
         delete_draft(document)
 
 
 def delete_draft(document: dict) -> bool:
-    if not db.document_delete_draft(document["id"], document["owner_id"]):
+    if not attachment_records.document_delete_draft(document["id"], document["owner_id"]):
         return False
     folder = storage.root(document["owner_id"], document["id"])
     path = folder / ("source" + document["suffix"])
@@ -212,8 +214,8 @@ def reprocess(document: dict) -> dict:
               "client_key": uuid.uuid4().hex, "message": "重新处理附件", "attachment_ids": [document["id"]],
               "config": cfg, "state": "waiting_parse", "created": time.time(),
               "job_id": uuid.uuid4().hex[:16], "run_refs": {}, "failures": {}}
-    turn, _ = db.attachment_turn_create(record)
+    turn, _ = attachment_records.attachment_turn_create(record)
     from station.documents.pipeline import Executor
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     get_manager().submit(Executor(), {"turn_id": turn["id"]}, document["owner_id"], job_id=turn["job_id"])
     return turn

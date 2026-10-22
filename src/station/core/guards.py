@@ -1,7 +1,7 @@
 """批准闸（最轻的 PreToolUse 守卫）。
 
 P1 策略：approve 类工具不直接跑——agent 循环把它挂起（thread.pending），
-下一回合由用户在对话里“允许/拒绝”后由 server 补执行（in-band 批准）。
+下一回合由用户在对话里“允许/拒绝”后由 chat.approvals 补执行（in-band 批准）。
 out-of-band 批准接口（POST /api/approve）留到后续。
 
 新手视角：为什么危险操作要“问一句”？

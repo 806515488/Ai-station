@@ -8,7 +8,7 @@ import math
 import re
 import time
 
-from station.core import systemone
+from station.models.protocols import systemone
 
 
 def _json(text: str) -> dict | None:
@@ -24,7 +24,7 @@ def _json(text: str) -> dict | None:
 
 
 def _chat(entry: dict, text: str, catalog: list, threshold: float, budget: float) -> dict:
-    from station.core.model import Model
+    from station.models.client import Model
 
     lines = [f"- {c.id}：{c.name}。{c.description} 用户常见说法：{c.hints}" for c in catalog]
     prompt = ("你是 station 的技能路由判词器，只负责判断这句话该交给哪个技能。\n"

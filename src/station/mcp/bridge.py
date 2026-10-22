@@ -52,7 +52,7 @@ def _make_runner(server_id: str, tool_name: str):
     ★ 这里有个 Python 的经典坑：闭包捕获的是**变量**不是**值**。要是直接在循环里写
       `lambda ctx, **a: use(server_id)`，等真调用时 server_id 早变成最后一个了
       —— 于是所有工具都会去调同一个服务。所以用**默认参数**把值当场"冻"进去
-      （`_sid=server_id` 在函数定义那一刻就求值固定了）。同理见 server.py 里
+      （`_sid=server_id` 在函数定义那一刻就求值固定了）。同理见 app/routes/models.py 里
       `onclick=()=>cfgSave()` 那条注释，是同一类问题的另一种表现。
     """
     def _run(ctx, _sid=server_id, _tn=tool_name, **args):

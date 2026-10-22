@@ -48,7 +48,7 @@ def _owner(ctx) -> str:
 
 def resolve_entry(ctx) -> dict:
     """取当前用户「语音识别模型」槽位的首条配置。"""
-    from station import modelcfg
+    from station.models import config as modelcfg
     entries = modelcfg.resolve(_owner(ctx), "speech")
     if not entries:
         raise RuntimeError(

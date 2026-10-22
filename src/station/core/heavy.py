@@ -7,7 +7,7 @@
 
 ★ 为什么需要它（09-13 实测，别删）：
   这台站可能跑在 1.9G 内存的小机器上，而两件重活的峰值内存都是**跟页数线性**的 ——
-  实测档案 4 件套导出：40 页 524MB / 120 页 1411MB（≈11MB/页，见 archive.export.
+  实测档案 4 件套导出：40 页 524MB / 120 页 1411MB（≈11MB/页，见 archive_core.export.
   original_pdf）。两个任务撞在一起是**相乘不是相加**：串行跑峰值 = max(单件)，
   并行跑 = sum(所有件) + 两份各自的临时副本 → 机器 OOM，进程被内核杀掉，
   用户看到的是"服务突然没了"（没有任何报错，最难查的那种故障）。
@@ -67,7 +67,7 @@ def heavy_slot(what: str, wait: float | None = None):
     #   还的是 B 的牌子"（只要 _gate 中途被换过）。运行期 _gate 从不更换，所以这个写法
     #   在线上无害；但单测的 fixture 会 monkeypatch 它，于是上一个用例留下的后台线程
     #   会在新用例里还牌子 → 白送一个名额 → **闸静默失效**（正是这个模块最怕的故障）。
-    #   09-14 被 tests/test_heavy.py 的顺序依赖暴露出来，改成局部变量。
+    #   09-14 被 tests/core/test_heavy.py 的顺序依赖暴露出来，改成局部变量。
     gate = _gate
     # acquire 的 timeout=None 就是"永远阻塞"，语义正好对上，不用分两个分支
     got = gate.acquire(timeout=wait)

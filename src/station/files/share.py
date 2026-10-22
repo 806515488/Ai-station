@@ -16,11 +16,14 @@ URL**"。所以我们必须开一个**不登录也能取到、但不可猜、会
 """
 from __future__ import annotations
 
+from station.persistence.repositories import shares as share_records
+
+
 import os
 import secrets
 import time
 
-from station import config, db
+from station import config
 
 # 令牌默认有效期（秒）。
 # ★★ 必须**覆盖整条任务**：官方要求"媒体链接在任务完成前保持有效"，而实测一条 5 秒的
@@ -53,9 +56,9 @@ def make_ref_link(fid: str, owner: str, ttl: float | None = None) -> str:
         raise ValueError("没有要分享的文件")
     if not config.public_base():
         raise ValueError(config.public_base_hint())
-    db.ref_link_sweep()                      # 顺手清过期的（不需要后台定时任务）
+    share_records.ref_link_sweep()                      # 顺手清过期的（不需要后台定时任务）
     token = secrets.token_urlsafe(32)        # 256 bit、URL 安全；**别换成 uuid**
-    db.ref_link_add(token, fid, owner,
+    share_records.ref_link_add(token, fid, owner,
                     time.time() + (link_ttl() if ttl is None else float(ttl)))
     return token
 
@@ -75,6 +78,6 @@ def revoke(tokens) -> int:
       把它封在这一层，是为了让调用方**没有机会写错**。
     """
     try:
-        return db.ref_link_revoke(list(tokens or []))
+        return share_records.ref_link_revoke(list(tokens or []))
     except Exception:                        # noqa：善后失败不该反噬业务
         return 0

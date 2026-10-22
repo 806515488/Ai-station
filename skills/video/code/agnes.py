@@ -5,7 +5,7 @@
   它只做三件事：把请求发出去、把响应解析成 dict、把"出错了"翻译成人话异常。
   "什么时候该建任务、失败了要不要重试、生成了往哪儿存" 全是调用方（video_tools.py）
   的事 —— **把协议细节和业务逻辑分开**，好处是单测里可以整个替身掉这个模块
-  （tests/test_video_skill.py 就是这么干的：假掉三个函数，一个字节都不上网）。
+  （tests/skills/video/test_video_skill.py 就是这么干的：假掉三个函数，一个字节都不上网）。
 
 Agnes 的接口形状（官方文档，2026-09 核实）：
   创建任务  POST {base_url}/videos          ← base_url 形如 https://apihub.agnes-ai.com/v1

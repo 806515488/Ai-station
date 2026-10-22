@@ -8,13 +8,13 @@
     用户配置、也不落库 —— 落库就会有"库里那条和代码里那条不一致"的麻烦。
     ★ 只有内置的可以用 **stdio**（在服务器上起一个进程）。
 
-  · **动态（用户配的）**：用户在界面上自己加，每人一份落 DB（`db.mcp_config_*`）。
+  · **动态（用户配的）**：用户在界面上自己加，每人一份落 DB（`settings_records.mcp_config_*`）。
     ★ 只允许 **http / sse** 两种传输。
 
 ★★ 那条安全边界（全方案的命根子，别放松）：
   用户能填的**只有 URL**。stdio 意味着"在服务器上起任意进程"，而这个站是公网可达的，
   放开它等于给任意注册用户一个 RCE 端点。所以 `_validate` 里对 transport 卡了一道
-  白名单，用户配置里出现 stdio 一律拒 —— 并且有测试直接钉这条（`tests/test_mcp.py`）。
+  白名单，用户配置里出现 stdio 一律拒 —— 并且有测试直接钉这条（`tests/services/test_mcp.py`）。
 
   为什么动态的那些要"连一次才知道有哪些工具"、而内置的不用：
   内置 server 的代码就在本仓库里（`servers/websearch.py`），它的工具清单可以直接写在
@@ -23,12 +23,15 @@
 """
 from __future__ import annotations
 
+from station.persistence.repositories import settings as settings_records
+
+
 import os
 import re
 import sys
 from dataclasses import dataclass, field
 
-from station import db
+
 
 # 每人最多配几个 —— 防止有人往库里灌几百条把界面/重试拖死（对齐 modelcfg.MAX_PROVIDERS）
 MAX_SERVERS = 20
@@ -101,7 +104,7 @@ class ServerSpec:
 # ── 内置（静态）的 MCP server ─────────────────────────────────────────
 # ★ 这里的 tools 是**手写的**，必须和 servers/websearch.py 里 FastMCP 注册的工具一致。
 #   两处漂移不会有任何报错（工具就是不见了/或者列着一个调不通的名字），所以有测试钉着：
-#   tests/test_mcp.py::test_builtin_tool_table_matches_the_real_server
+#   tests/services/test_mcp.py::test_builtin_tool_table_matches_the_real_server
 #
 #   为什么内置的不用"连一次拿清单"：静态加载的意义就是**开箱即用** ——
 #   新用户第一次说话就该有搜索工具，不该先让他点一次"测试连接"。
@@ -237,7 +240,7 @@ def _validate(servers: list[dict]) -> list[str]:
 
 def load_servers(user_id: str) -> list[dict]:
     """读某用户自己配的 server 清单（没配过返回空列表）。"""
-    cfg = db.mcp_config_load(user_id) or {}
+    cfg = settings_records.mcp_config_load(user_id) or {}
     servers = cfg.get("servers")
     return [s for s in servers if isinstance(s, dict)] if isinstance(servers, list) else []
 
@@ -252,13 +255,13 @@ def save_servers(user_id: str, incoming: list[dict]) -> list[dict]:
     problems = _validate(merged)
     if problems:
         raise ValueError("；".join(problems))
-    db.mcp_config_save(user_id, {"version": 1, "servers": merged})
+    settings_records.mcp_config_save(user_id, {"version": 1, "servers": merged})
     return merged
 
 
 def delete_servers(user_id: str) -> None:
     """清空用户配的 server（内置的那几个不受影响，它们不在库里）。"""
-    db.mcp_config_delete(user_id)
+    settings_records.mcp_config_delete(user_id)
 
 
 def set_cache(user_id: str, server_id: str, tools: list[dict], error: str = "") -> None:
@@ -276,7 +279,7 @@ def set_cache(user_id: str, server_id: str, tools: list[dict], error: str = "") 
             hit = True
     if not hit:
         return                                  # 不是用户配的（内置的）→ 不落库
-    db.mcp_config_save(user_id, {"version": 1, "servers": servers})
+    settings_records.mcp_config_save(user_id, {"version": 1, "servers": servers})
 
 
 def _now() -> float:

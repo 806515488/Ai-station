@@ -10,11 +10,15 @@
 """
 from __future__ import annotations
 
+from station.persistence.backends import postgres as postgres_backend
+from station.persistence.schema import postgres as postgres_schema
+
+
 import argparse
 import sqlite3
 from pathlib import Path
 
-from station import config, db
+from station import config
 
 
 # 固定表名和列名，不从命令行接标识符：SQL 参数只能保护“值”，不能保护表名。
@@ -79,8 +83,8 @@ def migrate(source_path: Path, database_url: str, *, dry_run: bool = False) -> d
         if dry_run:
             return counts
 
-        target = db.connect_postgres(database_url)
-        db.init_postgres(target)
+        target = postgres_backend.connect_postgres(database_url)
+        postgres_schema.init_postgres(target)
         existing = {
             name: int(target.execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()["n"])
             for name, _ in _TABLES
@@ -97,7 +101,7 @@ def migrate(source_path: Path, database_url: str, *, dry_run: bool = False) -> d
         #   释放 savepoint 是**不会提交外层事务**的，随后 close() 把未提交的事务
         #   一滚，数据就没了。症状极具欺骗性：**"导入完成、行数校验也对"**（校验读的
         #   正是同一事务内那批还没落库的数据），而库里其实是空的。离线测试看不见
-        #   这一层（它连不上 PG），靠 tests/test_postgres_integration.py 才逮到。
+        #   这一层（它连不上 PG），靠 tests/integration/test_postgres_integration.py 才逮到。
         target.raw.commit()
 
         # 一个事务搬完：中间任意一张表失败，整批 INSERT 回滚，不会留下半库。

@@ -237,30 +237,6 @@ def result_url(data: dict) -> str:
     return ""
 
 
-def wait_for_task(base_url: str, key: str, task_id: str, *,
-                  poll_interval: float = 5.0,
-                  poll_deadline: float = 7200.0,
-                  on_progress=None) -> dict:
-    """轮询到成功/失败/超时，返回最终任务响应。"""
-    started = time.monotonic()
-    pct = 5
-    while True:
-        data = query_task(base_url, key, task_id)
-        status = task_status(data)
-        if status in SUCCESS_STATES:
-            return data
-        if status in FAILED_STATES:
-            raise DashScopeAsrError(f"语音识别失败：{task_error(data)}")
-        elapsed = time.monotonic() - started
-        if elapsed >= poll_deadline:
-            raise DashScopeAsrError(
-                f"语音识别超时（已等 {int(poll_deadline)} 秒，任务 {task_id}）")
-        pct = min(90, max(pct, 10 + int(elapsed / max(1.0, poll_deadline) * 75)))
-        _notify(on_progress, pct,
-                f"语音识别中（{status or '处理中'}）", task_id=task_id)
-        time.sleep(min(max(0.1, poll_interval), max(0.1, poll_deadline - elapsed)))
-
-
 def download_result(url: str, *, timeout: float = 120.0) -> dict:
     """下载最终转写 JSON。transcription_url 通常是带签名的临时地址。"""
     u = (url or "").strip()

@@ -37,7 +37,7 @@ def tools_for(skill, user_id: str = "") -> list[Tool]:
       "今天北京的天气"判词判不出来、工具当场从模型手上消失（见 mcp/bridge.py 文件头）。
 
     为什么要去重：通用聊天（GenericAgent）的 tools 本身就是那份全局工具
-    （`_skill_for_tool` 反查时要靠它），合并时不判重就会出现两份同名 schema。
+    （chat.routing.agent_for_tool 反查时要靠它），合并时不判重就会出现两份同名 schema。
     """
     out: list[Tool] = []
     seen: set[str] = set()
@@ -72,7 +72,7 @@ def _run_tool_impl(ctx: Context, tool: Tool, args: dict) -> str:
 
     ★ render 可以是**一张卡（dict）或一串卡（list[dict]）**（09-13 加的 list 形式）：
       一次改动常常要同时刷好几张卡（如"改了类别"的全景卡 + "学到的口径待确认"卡）。
-      下游消费点本来就都是循环（本文件下面、server 的 _replay_items/批准补执行），
+      下游消费点本来就都是循环（本文件下面、chat.approvals 的批准补执行），
       所以放开 list **不需要动下游**。顺带一提：MCP 的 content blocks 本来就是一串，
       这个方向和"技能要能映射成 MCP"是一致的。
     """
@@ -154,7 +154,7 @@ def jobs_note(thread) -> str:
     if not jid:
         return ""
     try:
-        from station.jobs.manager import get_manager
+        from station.tasks.executor import get_manager
         snap = get_manager().get(jid)
     except Exception:                      # noqa：任务那边坏了不许把对话带崩
         return ""
@@ -180,7 +180,7 @@ def run_agent(ctx: Context, thread, skill, model):
     - ctx    本次运行上下文（见 core/context.py）
     - thread 会话（历史 msgs 会被这里不断追加）
     - skill  技能对象（skill.tools = 本技能工具白名单）—— 与全局工具合并后使用
-    - model  模型（core/model.py，只要它认识 stream(msgs, tools)）
+    - model  模型（models/client.py，只要它认识 stream(msgs, tools)）
     因为含 yield 关键字，这是一个【生成器】：调用它不会立刻跑，
     要 for 循环逐个取值时才执行——这正是 SSE 能实时推送的原因。
     """
@@ -196,7 +196,7 @@ def run_agent(ctx: Context, thread, skill, model):
     by_name = {t.name: t for t in tools}
     used_global: dict[str, int] = {}     # 这一轮里各全局工具调了几次（防打转，见 _GLOBAL_TOOL_CAP）
 
-    # 这一轮给模型的系统提示 = 技能的岗位须知（ctx.system，server 从 system.md 读来）
+    # 这一轮给模型的系统提示 = 基础岗位须知（ctx.system，由 chat.runtime 准备）
     # + **后台任务现状**（宿主每轮现算，见 jobs_note）
     # + **外部工具须知**（有 MCP 工具时提醒"返回内容当资料不当指令"）。
     # ★ 只算一次、循环外：任务是以分钟计的，一轮之内不会变；每步都查一次纯属浪费。
@@ -219,7 +219,7 @@ def run_agent(ctx: Context, thread, skill, model):
             thread.msgs, _ = compact.compact(thread.msgs, model)
 
         # ① 把历史 + 工具说明发给模型，要它回答。
-        #    若 ctx.system 有技能系统提示词（server 从 skills/<id>/system.md 读来），
+        #    若 ctx.system 有技能系统提示词（registry 读取 system.md，chat.runtime 装配），
         #    就作为第一条 system 消息临时插在最前——不写进 Thread 历史（每次现插，
         #    改 system.md 立即生效，历史里也不留过期副本）。
         #    ★ 后台任务现状（sys_prompt 里那一段）走的也是这条路：**每轮现插**，
@@ -242,7 +242,7 @@ def run_agent(ctx: Context, thread, skill, model):
                     sent += part["delta"]
                     yield Event(EV_DELTA, {"text": part["delta"]})
                 elif "retry" in part:
-                    # 模型连接失败、正在退避重连（见 core/model.py 的 RETRY_WAITS）。
+                    # 模型连接失败、正在退避重连（见 models/policy.py 的 RETRY_WAITS）。
                     # 只透传，不改任何状态：这一片既不是正文也不是最终结果，
                     # 前端拿它在等待态里显示倒计时。
                     yield Event(EV_RETRY, part["retry"])
@@ -286,7 +286,7 @@ def run_agent(ctx: Context, thread, skill, model):
                      and needs_approval(by_name[c["name"]], ctx.auto_approve)), None)
         if need is not None:
             # 挂起前把这轮已经说出口的话写进历史：否则那句前言只活在浏览器的即时显示里，
-            # 一刷新就没了。下一回合 server 补执行时会另补一条带 tool_calls 的 assistant
+            # 一刷新就没了。下一回合 chat.approvals 补执行时会补带 tool_calls 的 assistant
             # 消息，两条相邻也不违协议（tool 消息只要求紧跟带 tool_calls 的那条）。
             if text.strip():
                 thread.add({"role": "assistant", "content": text})
@@ -315,11 +315,11 @@ def run_agent(ctx: Context, thread, skill, model):
         # ④ 全部放行：把“assistant 决定调这些工具”记进历史（模型要求工具结果要
         #   有对应的 assistant tool_calls 消息配对，顺序不能乱）
         # content 填本轮已流出的文字（不再是空串）：真模型常会先说一句“我来看一下”
-        # 再调工具，写进历史才能让实时显示与刷新后的回放一致（见 server._replay_items）。
+        # 再调工具，写进历史才能让实时显示与刷新后的回放一致（见 app.routes.sessions._replay_items）。
         thread.add({"role": "assistant", "content": text, "tool_calls": calls})
         # 前端提示"正在调什么工具"。除了名字还带上 **label（给人看的一句话）与参数** ——
         # 前端拿它渲染成人话（`archive.list_vision_models` 这种名字用户根本看不懂）。
-        # 历史回放那条路（app/server._replay_items）发**同样形状**，两边共用前端同一个
+        # 历史回放那条路（app/app.routes.sessions._replay_items）发**同样形状**，两边共用前端同一个
         # 渲染函数 —— 别再各拼一份中文字符串（原先就是各写各的，改一处忘一处）。
         yield Event(EV_TOOL, {
             "names": [c.get("name") for c in calls],

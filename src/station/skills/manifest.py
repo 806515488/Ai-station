@@ -65,6 +65,7 @@ class Skill:
     #   （skills/archive：工具面 + 耗时的识别执行器）。type 只决定它对用户的形态。
     tools: list = field(default_factory=list)      # 技能自带的工具（模块写了 tools() 才有）
     build_runner: Optional[Callable] = None        # 任务生成器入口（模块写了 build_runner() 才有）
+    task_recovery: object = None                   # 已有任务恢复规则（运行时接入，不进 manifest）
 
     # to_info() 已删（09-11）：唯一用途是喂 /api/capabilities 渲染前端技能栏，
     # 技能栏随"统一主对话"一起删了。icon/group/args 这几个 manifest 字段因此

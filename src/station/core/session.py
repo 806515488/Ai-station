@@ -8,7 +8,7 @@
     role=tool 的消息就是“工具执行结果”，模型靠它接着想。
   - 为什么每次对话要带整本历史？因为模型没记忆 —— 你每说一句，都要把“到目前为止
     聊了什么 + 工具结果”整包发给它，它才知道上下文。
-  - pending：危险工具跨回合“请求→允许/拒绝”时，把待批准信息挂这里（见 server.py 的
+  - pending：危险工具跨回合“请求→允许/拒绝”时，把待批准信息挂这里（见 chat/approvals.py 的
     in-band 批准逻辑和 core/agent.py 的批准闸）。
 """
 from __future__ import annotations
@@ -79,15 +79,20 @@ class Thread:
         """用户回答完（允许或拒绝）就清掉，别让下次对话误触发。"""
         self.meta.pop("pending", None)       # .pop(k, None)：有就删，没有也不报错
 
-    # ── 持久化（09-06 起走 SQLite，见 station/db.py；root 参数保留兼容旧测试）──
+    # ── 持久化（记录交给 persistence/repositories/threads；root 保留兼容）──
     def save(self, root: Path | None = None):
         """把整个 Thread 存进 SQLite（threads 表）。
 
         root 参数已废弃（历史签名兼容）：传了也不走文件——测试里要隔离数据库，
-        用 conftest 把 station.db.DB_PATH/连接指到临时目录。
+        conftest 用 database.reset() 关闭连接并切到临时 SQLite。
         """
-        from station import db
-        db.thread_save(self)
+        from station.persistence.repositories import threads
+        threads.thread_save(self.to_record())
+
+    def to_record(self) -> dict:
+        """向仓库交纯数据，持久层不反向 import Thread。"""
+        return {"id": self.id, "user_id": self.user_id, "skill_id": self.skill_id,
+                "msgs": self.msgs, "meta": self.meta, "created": self.created, "updated": self.updated}
 
     @classmethod
     def load(cls, thread_id: str, root: Path | None = None) -> "Thread | None":
@@ -95,8 +100,15 @@ class Thread:
 
         @classmethod：以“类”调用 Thread.load(...)，第一个参数自动是类本身(cls)。
         """
-        from station import db
-        return db.thread_load(thread_id)
+        from station.persistence.repositories import threads
+        record = threads.thread_load(thread_id)
+        if record is None:
+            return None
+        thread = cls(skill_id=record["skill_id"], thread_id=record["id"])
+        thread.msgs, thread.meta = record["msgs"], record["meta"]
+        thread.user_id = record["user_id"]
+        thread.created, thread.updated = record["created"], record["updated"]
+        return thread
 
 
-# list_threads() 已删（09-11）：零调用方。前端"历史会话"直接调 db.thread_list（带用户过滤）。
+# list_threads() 已删（09-11）：前端历史会话使用 threads 仓库的本人列表查询。

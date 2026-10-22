@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # ---- 路径推导 ---------------------------------------------------------
@@ -18,7 +19,16 @@ from pathlib import Path
 # .resolve() 拿到绝对路径；parents[0]=station, [1]=src, [2]=仓库根(workforda)
 REPO = Path(__file__).resolve().parents[2]          # 仓库根
 SRC = REPO / "src"                                   # 源码目录（.env 在这）
-SKILLS_DIR = REPO / "skills"                          # 能力开放目录（仓库根，放所有技能）
+def _skills_dir() -> Path:
+    """源码使用仓库 skills；wheel 使用安装时带入的共享技能目录，可显式覆盖。"""
+    configured = os.environ.get("STATION_SKILLS_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    source = REPO / "skills"
+    return source if source.is_dir() else Path(sys.prefix) / "share" / "station" / "skills"
+
+
+SKILLS_DIR = _skills_dir()                            # 技能代码、manifest、提示词的共同根目录
 DATA_DIR = REPO / "data" / "station"                  # 运行时数据（已在 .gitignore 里，不入库）
 
 # ---- 默认模型通道 -----------------------------------------------------

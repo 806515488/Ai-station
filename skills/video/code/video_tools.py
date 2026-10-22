@@ -29,6 +29,12 @@ from pathlib import Path
 
 from station.core.tool import Tool
 
+def task_recovery():
+    """把本技能已有的原任务恢复规则交给宿主任务用例。"""
+    import video_tasks
+    return video_tasks
+
+
 # ── 视频模型的硬约束（Agnes Video 2.5 Flash，官方文档）────────────────
 # 这几个数字散在工具描述、校验、卡片文案好几处，统一放这儿，改一处就够。
 SECONDS_MIN, SECONDS_MAX, SECONDS_DEFAULT = 4, 12, 5
@@ -92,7 +98,7 @@ def _video_entry(ctx) -> tuple[dict, str]:
     走的是**用户自己的模型配置**（「视频生成模型」那一行），所以界面里改了就生效 ——
     这正是那个槽位有意义的理由。返回的 entry 形状见 station/modelcfg._entry。
     """
-    from station import modelcfg
+    from station.models import config as modelcfg
     entries = modelcfg.resolve(_owner(ctx), "video")
     if not entries:
         return {}, ("还没配置「视频生成模型」。点右上角 ⚙ 「模型配置」，"
@@ -195,7 +201,7 @@ def _img_data_url(path: str) -> str:
     """本地图片 → base64 data URL（喂给识图模型）。
 
     ★ 这张图**只走这一条一次性消息**，绝不写进 Thread 历史 —— 历史落 SQLite 且每轮重发，
-      几 MB 的 base64 会让会话表和 token 一起炸（见 core/model.py `_to_llm` 的告诫）。
+      几 MB 的 base64 会让会话表和 token 一起炸（见 models/protocols/openai.py `_to_llm` 的告诫）。
     """
     data = Path(path).read_bytes()
     mime = "image/png" if str(path).lower().endswith(".png") else "image/jpeg"
@@ -227,8 +233,8 @@ def _describe_portrait(ctx, items: list[dict]) -> tuple[dict | None, str]:
     ★ 失败**不抛异常、也不静默**：调用方要把原因写进草稿卡的 note 里 ——
       "特征没读出来"和"读出来了但不好看"对用户是两回事。
     """
-    from station import modelcfg
-    from station.core.model import build
+    from station.models import config as modelcfg
+    from station.models.client import build
 
     entries = modelcfg.resolve(_owner(ctx), "vision")
     if not entries:
@@ -307,8 +313,8 @@ def t_draft(ctx, idea: str, seconds: str = "5", aspect_ratio: str = "16:9",
     ★ `use_my_photos` **默认关**：用户传过照片不等于每条视频都想出镜。
       只有他明说"用我的照片/让我出镜/以我为主角"时才传 true。
     """
-    from station import modelcfg
-    from station.core.model import build
+    from station.models import config as modelcfg
+    from station.models.client import build
 
     raw = (idea or "").strip()
     if not raw:
@@ -437,7 +443,7 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
            任务 —— 旧成片会顶在新批准卡下面，看着像"重新生成却把以前的视频调出来"。
       卡片把这两条一起解决了：位置对（跟着工具调用走）、内容在（落库）。
     """
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     from station.skills.registry import get_registry
 
     p = (prompt or "").strip()
@@ -489,7 +495,7 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
 
 def t_status(ctx, job_id: str = "") -> str:
     """查生成进度（不给编号就用这个会话最近一次的任务）。"""
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     jid = (job_id or "").strip() or _thread_job_id(ctx)
     if not jid:
         return "这个会话还没有生成过视频。"
@@ -507,7 +513,7 @@ def t_status(ctx, job_id: str = "") -> str:
 def t_show(ctx, file_id: str = "") -> dict:
     """把生成好的视频作为卡片发到对话里（对话里能直接播放 + 下载）。"""
     from station.files import store as fs
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
 
     fid = (file_id or "").strip()
     if not fid:
@@ -547,7 +553,7 @@ def build_runner(ctx, prompt: str = "", seconds: str = "5",
     而不只是"照着文字描述画了一个人"。
 
     新手视角：这是个**生成器函数** —— 每 `yield` 一次，宿主就收到一条进度事件并
-    落库，所以前端进度条能实时动。宿主只认三种事件（见 jobs/manager.py 的 Job.append）：
+    落库，所以前端进度条能实时动。宿主只认三种事件（见 tasks/executor.py 的 Job.append）：
       {"type":"progress","percent":N,"message":"…"}   改进度条
       {"type":"artifact","id":"<文件id>"}              登记产物
       {"type":"log","text":"…"}                        只留痕，不改进度条
@@ -557,7 +563,7 @@ def build_runner(ctx, prompt: str = "", seconds: str = "5",
       前端并落进 `jobs.log` 一列，后者落 `jobs.args` 一列 —— 两个地方都是明文长期保存的。
       所以签名这个动作**只在这里做**（make 只传 fid，URL 出了这个函数就没人知道）。
     """
-    from station import modelcfg
+    from station.models import config as modelcfg
     from station.files import share
     from station.files import store as fs
 

@@ -27,12 +27,38 @@ Thread 会话天然对应"手头这卷"。多卷并行是 §9 开放问题，初
 """
 from __future__ import annotations
 
+import station.models.catalog as model_catalog
+
+
 import json
 import os
 import re
 import time
 
 from station.core.tool import Tool
+
+
+def task_recovery():
+    from archive_core.service import tasks
+    return tasks
+
+
+def repository():
+    """档案数据访问入口；宿主通过技能注册表取得，业务 SQL 保持在技能内部。"""
+    from archive_core.storage import repository as archive_records
+    return archive_records
+
+
+def cli(argv=None):
+    """技能的本地命令行入口；宿主只定位该函数，参数解析由引擎负责。"""
+    from archive_core.engine.run import main
+    return main(argv)
+
+
+def page_resource(project: str, seq: int, thumb: bool = False):
+    """向已完成归属校验的 HTTP 适配返回页图资源，不暴露为模型工具。"""
+    from archive_core.station_adapter import page_resource as resource
+    return resource(project, seq, thumb)
 
 
 # ── "当前卷"登记（ctx.data_dir/current.json）─────────────────────────
@@ -71,7 +97,7 @@ def _state(ctx) -> tuple[str, dict]:
     pj, person = _get_current(ctx)
     if not pj:
         raise ValueError("还没有正在整理的档案卷。先发照片（我会给上传按钮），或说出卷所在目录。")
-    from archive.service.interactive import load_state
+    from archive_core.service.interactive import load_state
     st = load_state(pj)
     if st is None:
         raise ValueError("这卷还没识别完（现场未建立）。先让我识别：说\"开始识别\"。")
@@ -80,7 +106,7 @@ def _state(ctx) -> tuple[str, dict]:
 
 def _by_uid(st: dict, keyword: str):
     """按 uid 或标题关键词找材料行（模型爱说"任免表"而不是 m7）——沿用旧 review 代码。"""
-    from archive.service.interactive import mat_by_uid
+    from archive_core.service.interactive import mat_by_uid
     m = mat_by_uid(st["materials"], keyword)
     if m is not None:
         return m
@@ -173,7 +199,7 @@ def t_scan_photos(ctx, dir: str = "", person: str = "") -> str:
       "126 张，李明"，而他根本没填）。卡在这里，模型忘了问也建不成卷。
       用户说"就用文件夹名"时，模型把上面给的那个名字当 person 传过来即可。
     """
-    from archive.storage.project import create_project
+    from archive_core.storage.project import create_project
     if not dir or not os.path.isdir(dir):
         return f"目录不存在：{dir or '（空）'}。请先上传照片或给一个有效目录。"
     name = (person or "").strip()                 # 没填就是没填，不拿目录名顶替
@@ -193,9 +219,9 @@ def t_scan_photos(ctx, dir: str = "", person: str = "") -> str:
     # 建卷即登记归属（空现场）：这样**识别过程中**就能取这一卷的页图了 ——
     # 页图端点按 archive_states 的归属鉴权，而识别结果要到跑完才写进去。
     # 不登记的话，识别进度面板每张缩略图都会拿到 404（浏览器里=破图）。
-    from archive.service.interactive import register_volume
+    from archive_core.service.interactive import register_volume
     register_volume(pj, name, _owner(ctx))
-    from archive.storage.project import load_project
+    from archive_core.storage.project import load_project
     _, records = load_project(pj)
     return (f"已建卷《{name}》：{len(records)} 页（按拍摄时间排序）。"
             f"下一步对我说\"开始识别\"即可。")
@@ -211,8 +237,8 @@ def _vision_chain_label(ctx) -> str:
     也是"这卷的现场归哪一家"的键。两处口径一旦不一致，recognize 的"是否识别过"判断
     就会跟实际落库的 channel 对不上（表现：明明识别过却一直让你重跑，或反过来）。
     """
-    from station import modelcfg
-    return modelcfg.chain_label(modelcfg.resolve(_owner(ctx), "vision"))
+    from station.models import config as modelcfg
+    return model_catalog.chain_label(modelcfg.resolve(_owner(ctx), "vision"))
 
 
 def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
@@ -228,18 +254,18 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
     ★ 换一家已经有结果时**不重跑**，直接切过去展示（用户要的是"看那家读的"，
       不是"再烧一遍"）—— 见下面 set_active 那段。
     """
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     from station.skills.registry import get_registry
     pj, person = _get_current(ctx)
     if not pj:
         return "还没有正在整理的档案卷，先发照片建卷。"
-    from archive.service.interactive import (
+    from archive_core.service.interactive import (
         invalidate_state, load_state, set_active)
     # 这一趟会落在哪个 channel：指定了就是那家，没指定就是识图链的链首
     if provider:
-        from station import modelcfg
+        from station.models import config as modelcfg
         entries = modelcfg.resolve_one(_owner(ctx), provider, "vision")
-        ch = modelcfg.chain_label(entries) if entries else provider
+        ch = model_catalog.chain_label(entries) if entries else provider
     else:
         ch = _vision_chain_label(ctx)
     st = load_state(pj, ch) if ch else load_state(pj)
@@ -285,7 +311,7 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
 
 def t_job_status(ctx, job_id: str = "") -> str:
     """工具：查识别 job 的状态/进度（agent 汇报进度用）。"""
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     pj, person = _get_current(ctx)
     if not job_id:
         thread = getattr(ctx, "thread", None)
@@ -319,14 +345,14 @@ def _vision_menu(ctx, pj: str) -> tuple[list[dict], str]:
       · 没读过          —— 缓存也是空的（要真读一遍）
     菜单的顺序：识图链里的按链序在前（链首=默认会用的那家），其余排后面。
     """
-    from station import modelcfg
-    from archive.service.interactive import active_channel, cache_coverage, channels
+    from station.models import config as modelcfg
+    from archive_core.service.interactive import active_channel, cache_coverage, channels
     provs = modelcfg.vision_providers(_owner(ctx))
     done = {c["channel"]: c for c in channels(pj)}
     cur = active_channel(pj)
     rows, total = [], 0
     for p in provs:
-        channel = modelcfg.chain_label(modelcfg.resolve_one(_owner(ctx), p["id"], "vision"))
+        channel = model_catalog.chain_label(modelcfg.resolve_one(_owner(ctx), p["id"], "vision"))
         got, total = cache_coverage(pj, channel)
         if channel in done:
             state = f"已识别过（{total} 页）"
@@ -372,10 +398,10 @@ def t_use_model(ctx, provider: str) -> dict | str:
     pj, _ = _get_current(ctx)
     if not pj:
         return "还没有正在整理的档案卷，先发照片建卷。"
-    from archive.service.interactive import channels, set_active
-    from station import modelcfg
+    from archive_core.service.interactive import channels, set_active
+    from station.models import config as modelcfg
     entries = modelcfg.resolve_one(_owner(ctx), provider, "vision")
-    channel = modelcfg.chain_label(entries) if entries else provider
+    channel = model_catalog.chain_label(entries) if entries else provider
     chans = {c["channel"] for c in channels(pj)}
     if channel not in chans:
         return (f"「{provider}」还没读过这卷，没有它的结果可看。"
@@ -398,7 +424,7 @@ def t_list_state(ctx, keyword: str = "") -> str:
 
 def t_show_page(ctx, seq: int) -> dict:
     """工具：展示某页原图+内容卡（page-card 长在对话流里）。"""
-    from archive.service.interactive import find_record, _load_records
+    from archive_core.service.interactive import find_record, _load_records
     pj, _ = _get_current(ctx)
     if not pj:
         raise ValueError("还没有正在整理的档案卷。")
@@ -419,11 +445,11 @@ def t_show_page(ctx, seq: int) -> dict:
 def _page_url(project_json: str, seq, thumb: bool = False) -> str:
     """拼某页图的 URL（thumb=True 取缩略图）。
 
-    实现已挪到 `archive.station_adapter.page_url`（上站桥），这里保留名字做转发 ——
+    实现已挪到 `archive_core.station_adapter.page_url`（上站桥），这里保留名字做转发 ——
     conventions 里点名的就是 `_page_url`，而且**编码规则只留一份**：识别进度面板
     也在拼同样的 URL，两边各写一份迟早有一边忘了 quote（那正是 09-10 破图的成因）。
     """
-    from archive.station_adapter import page_url
+    from archive_core.station_adapter import page_url
     return page_url(project_json, seq, thumb)
 
 
@@ -440,7 +466,7 @@ def t_show_overview(ctx) -> dict:
       `pages` 字段**保持照片号升序**（人靠"第 N 张"去翻实物），装订序另放 `binder`；
       两者顺序不同是正常的（照片顺序随机），前端按 `pages[i]` 配 `thumbs[i]`。
     """
-    from archive.domain.classes import VALID_SUBS, dir_sort_key
+    from archive_core.domain.classes import VALID_SUBS, dir_sort_key
     pj, st = _state(ctx)
     mats = st["materials"]
     groups: dict = {}
@@ -465,7 +491,7 @@ def t_show_overview(ctx) -> dict:
     issues = st.get("issues") or []
     # 这家读的：多模型并存后必须让用户一眼看出"现在看的是哪家读的"（否则切了模型
     # 还以为结果没变）。前端把它显示在卡片头上。
-    from archive.service.interactive import active_channel
+    from archive_core.service.interactive import active_channel
     ch = active_channel(pj)
     return {"text": (f"全景：{len(mats)} 份材料，{len(issues)} 项待核对。"
                      "点缩略图可就地放大看原图，点条目标题可预填修改话术。"),
@@ -485,7 +511,7 @@ def t_show_compare(ctx, seq: int) -> dict:
     ★ 优先读那一家**已有的 OCR 缓存**（0 花费）；只有没缓存才真调模型 ——
       "换一家对比"不该每次都为看一眼再烧一次钱（见 interactive.op_reocr）。
     """
-    from archive.service import interactive as it
+    from archive_core.service import interactive as it
     pj, _ = _get_current(ctx)
     cmp_ = it.op_reocr(pj, int(seq))
     o, n = cmp_["old"] or {}, cmp_["new"]
@@ -507,7 +533,7 @@ def _out_dir(pj: str) -> str:
       没识别过（没有 active channel）、或老卷导出在旧的 <项目>/out/ 下时，
       回落到那一层，保证老产物还看得见。
     """
-    from archive.service.interactive import active_channel
+    from archive_core.service.interactive import active_channel
     ch = active_channel(pj)
     base = os.path.join(os.path.dirname(pj), "out")
     return os.path.join(base, ch) if ch else base
@@ -565,7 +591,7 @@ def _learn_proposal(before: dict, after: dict, source: str = "ledger") -> dict:
     ★ 学习失败绝不能反过来影响"改类"这件正事，所以整段兜住 —— 出不来提案就是没有。
     """
     try:
-        from archive.service import learn
+        from archive_core.service import learn
         return learn.from_correction(before, after, source)
     except Exception:                            # noqa：学习是加分项，不许拖垮主操作
         return None
@@ -578,7 +604,7 @@ def _learn_out(prop: dict, headline: str = "") -> dict:
       真正落盘时再算一遍 —— 模型只负责说"哪一条"，它**不生成文件内容**，
       也就写不歪一行。顺带省掉了每轮几百 token 的大段文本。
     """
-    from archive.service import learn
+    from archive_core.service import learn
     lines = [i["entry"] for i in prop["items"]]
     txt = headline or f"系统从这次修正里提炼出 {len(lines)} 条口径，等你确认。"
     txt += "\n准备写进去的条文：\n" + "\n".join(f"  {x}" for x in lines)
@@ -594,7 +620,7 @@ def _learn_out(prop: dict, headline: str = "") -> dict:
 
 def t_set_category(ctx, target: str, category: str, title: str = "") -> dict | str:
     """工具：改某份的类别（target=uid 或标题关键词；category=小类码）。"""
-    from archive.domain.classes import normalize_category
+    from archive_core.domain.classes import normalize_category
     if normalize_category(category) is None:
         return f"类别码不合法：{category}（十类，四/九带小类如 四-1、九-2）。"
     pj, st = _state(ctx)
@@ -605,7 +631,7 @@ def t_set_category(ctx, target: str, category: str, title: str = "") -> dict | s
     # load_state 一次**（拿到的是另一份 dict），所以我们手里这个 m 不会被它改到。
     before = {"title": m.get("title"), "category": m.get("category")}
     try:
-        from archive.service.interactive import op_set_category
+        from archive_core.service.interactive import op_set_category
         st2 = op_set_category(pj, m["uid"], category, title or None, _owner(ctx))
     except ValueError as e:
         return f"改不了：{_err(e)}"
@@ -630,7 +656,7 @@ def t_merge(ctx, target_a: str, target_b: str) -> dict | str:
     if a is None or b is None:
         return f"找不到材料：{target_a if a is None else target_b}。先调 list_state。"
     try:
-        from archive.service.interactive import op_merge
+        from archive_core.service.interactive import op_merge
         op_merge(pj, a["uid"], b["uid"])
     except ValueError as e:
         return f"并不了：{_err(e)}"
@@ -646,7 +672,7 @@ def t_split(ctx, target: str, seqs: str) -> dict | str:
         return f"找不到材料：{target}。先调 list_state。"
     try:
         seq_list = [int(s.strip()) for s in str(seqs).replace("，", ",").split(",") if s.strip()]
-        from archive.service.interactive import op_split
+        from archive_core.service.interactive import op_split
         st2 = op_split(pj, m["uid"], seq_list)
     except ValueError as e:
         return f"拆不了：{_err(e)}"
@@ -665,8 +691,8 @@ def t_reocr(ctx, seq: int, adopt: bool = False) -> dict | str:
         刚看到的那张卡。现在改成从**那家的缓存**里取回同一张（reocr_page 早把它存下了），
         用户看到的和采用的是同一份。
     """
-    from archive.service import interactive as it
-    from archive.service.interactive import find_record, _load_records
+    from archive_core.service import interactive as it
+    from archive_core.service.interactive import find_record, _load_records
     pj, _ = _get_current(ctx)
     if not adopt:
         return t_show_compare(ctx, int(seq))     # 第一步：发对比卡（dict，带 render）
@@ -696,7 +722,7 @@ def t_checkpoints(ctx, ck_id: int = 0) -> dict | str:
     pj, _ = _get_current(ctx)
     if not pj:
         return "还没有正在整理的档案卷，先发照片建卷。"
-    from archive.service.interactive import list_checkpoints, restore_checkpoint
+    from archive_core.service.interactive import list_checkpoints, restore_checkpoint
     if not ck_id:
         cks = list_checkpoints(pj)
         if not cks:
@@ -725,7 +751,7 @@ def t_export(ctx) -> dict:
     job.result 原始态出过错（09-06 修复，见 station_adapter.export_archive）。
     返回 dict（text 给模型 + render 文件卡片给前端）——渲染契约见文件头。
     """
-    from archive.station_adapter import export_archive
+    from archive_core.station_adapter import export_archive
     from station.core import heavy
     pj, person = _get_current(ctx)
     if not pj:
@@ -761,7 +787,7 @@ def t_reconcile(ctx, path: str = "") -> dict:
     if not path:
         return {"text": "发了一张「上传改后的目录」卡片给用户，等他传完我会拿到路径。",
                 "render": {"type": "upload-card", "purpose": "xlsx", "project": pj}}
-    from archive.service import learn
+    from archive_core.service import learn
     try:
         res = learn.reconcile(pj, path, _owner(ctx))
     except ValueError as e:
@@ -780,7 +806,7 @@ def _learning_changes(ctx, title: str, category: str) -> list:
     pj, _ = _get_current(ctx)
     if not pj:
         raise ValueError("还没有正在整理的档案卷。")
-    from archive.service import learn
+    from archive_core.service import learn
     t_, c_ = title.strip(), category.strip()
     if bool(t_) != bool(c_):
         # ★ 只给一个 = 这次调用本身就不明确。**绝不能退化成"把这卷所有没学的都写进去"**
@@ -800,7 +826,7 @@ def _preview_apply_learning(ctx, title: str = "", category: str = "") -> str:
     ★ 宿主算不了这个（它不认识业务），所以由工具自己算 —— 见 `core/tool.Tool.preview`。
     ★ 只读不写：这里绝不能改任何东西（用户还没点"允许"）。
     """
-    from archive.service import learn
+    from archive_core.service import learn
     changes = _learning_changes(ctx, title, category)
     if not changes:
         return "没有要写的口径（这卷的修正都已经学过了）。"
@@ -818,7 +844,7 @@ def _preview_export(ctx) -> str:
     pj, person = _get_current(ctx)
     if not pj:
         return "还没有正在整理的档案卷。"
-    from archive.service import interactive as it
+    from archive_core.service import interactive as it
     st = it.load_state(pj) or {}
     n = len(st.get("materials") or [])
     return (f"把当前现场导出成 4 件套（共 {n} 份材料）：\n"
@@ -836,7 +862,7 @@ def t_apply_learning(ctx, title: str = "", category: str = "") -> str:
     ★ `risk="approve"` —— 宿主会先问用户，**用户不点"允许"就写不动**；
       问之前先给他看 `_preview_apply_learning` 算出的"要写什么"。
     """
-    from archive.service import learn
+    from archive_core.service import learn
     changes = _learning_changes(ctx, title, category)
     if not changes:
         return "没有要写的口径（这卷的修正都已经学过了）。"
@@ -857,7 +883,7 @@ def t_list_learning(ctx) -> dict:
     ★ 它只**列**（状态直接从账本 + 口径文件现算，不落任何库），一个字节都写不进去 ——
       真要写必须走 `apply_learning` 那道批准闸。
     """
-    from archive.service import learn
+    from archive_core.service import learn
     pj, _ = _get_current(ctx)
     prop = learn.pending_from_ledger(pj)
     if not prop:
@@ -884,8 +910,8 @@ def t_set_orientation(ctx, rotate: int = 90, only_landscape: bool = True) -> dic
     pj, _ = _get_current(ctx)
     if not pj:
         raise ValueError("还没有正在整理的档案卷。")
-    from archive.engine.orient import is_landscape   # "横躺"判据与自动探测共用一份
-    from archive.storage.project import load_project, save_records
+    from archive_core.engine.orient import is_landscape   # "横躺"判据与自动探测共用一份
+    from archive_core.storage.project import load_project, save_records
     _, records = load_project(pj)
     deg = int(rotate) % 360
     hit, skipped = 0, 0
@@ -1021,7 +1047,7 @@ def build_runner(ctx, **args):
       只负责起 job，真正跑识别的是这个入口。宿主 Registry 扫 entry 模块时看到谁就挂谁
       （见 src/station/skills/registry.py 第三步），于是"一次识别" = 起一个后台 job。
 
-    真正的实现在 archive.station_adapter.build_runner（识别链 + 落库都在 archive 包里，
+    真正的实现在 archive_core.station_adapter.build_runner（识别链 + 落库都在 archive 包里，
     本技能只是把它挂出来）；这里**只做转发**：一个技能 = 一个入口模块，宿主只认这一个
     entry，不用知道 archive 包里的文件怎么分层。
 
@@ -1034,5 +1060,5 @@ def build_runner(ctx, **args):
     函数内 import：和本文件其它地方一样懒加载 —— 装载技能时只 import 这个模块，
     不会顺手把整个 archive 包（连带 langchain/langgraph）拉起来。
     """
-    from archive.station_adapter import build_runner as _run
+    from archive_core.station_adapter import build_runner as _run
     return _run(ctx, **args)

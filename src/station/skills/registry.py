@@ -2,7 +2,7 @@
 
 entry 解析：import 模块后**看它暴露了什么就挂什么**（两个可以同时存在，互不排斥）：
   模块.tools()        → list[Tool]（name 为叶子，装载时补成 <ns>.<leaf>）
-  模块.build_runner() → 生成器工厂，见 station/jobs/manager 契约
+  模块.build_runner() → 生成器工厂，见 station/tasks/executor 契约
 manifest 里的 type 只管“这个技能对用户是什么形态”（agent=对话入口 / pipeline=纯后台），
 **不参与装载判断** —— 一个技能可以既有工具面、又带一个耗时执行器（如 skills/archive：
 工具面 + 识别执行器同一个技能，不再拆两个目录）。
@@ -53,7 +53,6 @@ def _import_entry(entry: str, folder: Path | None = None):
 
     entry 例子：
       "station.demo_agent"            → import 这个模块
-      "archive.station_adapter"       → import 既有业务包里的模块
       "weekly_report"                 → 技能自带代码：skills/<id>/code/ 下的模块
 
     新手视角：import 是 Python 找模块的机制，它只会去“sys.path 里的目录”找。
@@ -178,6 +177,9 @@ class Registry:
             if callable(getattr(obj, "build_runner", None)):
                 # 问模块“长活怎么跑”(build_runner) → 存进 s.build_runner
                 s.build_runner = obj.build_runner
+            recovery = getattr(obj, "task_recovery", None)
+            if callable(recovery):
+                s.task_recovery = recovery()
         return s
 
     # ── 查询 ──
@@ -186,6 +188,17 @@ class Registry:
     def get(self, skill_id: str) -> Skill | None:
         """按 id 取 Skill 对象；没有返回 None（而不是抛异常）。dict.get 天然不会越界。"""
         return self._skills.get(skill_id)
+
+    def entry_module(self, skill_id: str):
+        """加载技能公开入口，供 CLI/HTTP 适配调用；冷启动也会准备该技能代码路径。
+
+        调用者只知道技能 ID 和入口暴露的能力，不直接导入某个业务实现包。
+        Python 会缓存模块，预览很多页时不会反复加载实现或再次创建工具。
+        """
+        skill = self.get(skill_id)
+        if skill is None:
+            raise LookupError(f"技能不存在：{skill_id}")
+        return _import_entry(skill.entry, self._dir / skill_id)
 
     def list(self) -> list[Skill]:
         """列出所有 Skill 对象（dict 的 value 列表）。"""

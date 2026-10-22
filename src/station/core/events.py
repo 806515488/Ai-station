@@ -6,7 +6,7 @@
   - agent 调了工具 → Event(EV_TOOL, …)
   - 模型说了一句话 → Event(EV_DELTA, …)（前端逐字显示）
   - 危险工具要批准 → Event(EV_APPROVAL, …)
-理解“事件”后，看 app/server.py 就知道：这些 Event 被一行行转成 SSE 推到浏览器（to_sse）。
+理解“事件”后，看 app/streaming.py：这些 Event 在 HTTP 边界转成 SSE 推到浏览器（to_sse）。
 """
 from __future__ import annotations          # 让类型注解能用 `X | None`（Python 3.10+）写法
 
@@ -22,7 +22,7 @@ EV_RENDER = "render"                 # 渲染卡片（工具返回了卡片 → 
 EV_DONE = "done"                     # 本轮结束
 EV_ERROR = "error"                   # 出错
 # 模型调用失败、正在退避重连（09-15）：data = {"attempt","total","wait","error"}。
-# 前端拿它在等待态里显示"连接失败，N 秒后重试（第 k/5 次）"——见 core/model.py 的 RETRY_WAITS。
+# 前端拿它在等待态里显示"连接失败，N 秒后重试（第 k/5 次）"——见 models/policy.py 的 RETRY_WAITS。
 EV_RETRY = "retry"
 
 # 渲染卡片事件 data 的统一外壳键：

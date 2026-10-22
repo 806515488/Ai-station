@@ -60,16 +60,34 @@ documents = [
 
 [project.scripts]
 station-web = "station.app.server:main"   # 一键起站：pip install -e .[dev]; station-web
-archive-cli = "archive.engine.run:main"   # archive 引擎 CLI（无 Web，调试用）
+archive-cli = "station.skills.cli:archive_main"  # 保留命令名，具体实现随技能加载
 station-migrate-postgres = "station.migrate:main"  # SQLite 元数据一次性导入 PostgreSQL
 station-upgrade-postgres = "station.upgrade:main"  # 显式升级既有 PostgreSQL schema
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["station*", "archive*"]
+where = ["src", "skills/archive/code"]
+include = ["station*", "archive_core*"]
 
 [tool.setuptools.package-data]
 "station" = ["app/static/*", "documents/schemas/*.json"]
+
+# wheel 中代码按 Python 包安装，技能入口与可编辑资源按原目录层级一起携带。
+# 源码、Docker 仍使用仓库 skills；独立安装使用 sys.prefix/share/station/skills。
+[tool.setuptools.data-files]
+"share/station/skills/archive" = ["skills/archive/*.json", "skills/archive/*.md"]
+"share/station/skills/archive/code" = ["skills/archive/code/*.py"]
+"share/station/skills/archive/prompts" = ["skills/archive/prompts/*.md"]
+"share/station/skills/archive/口径" = ["skills/archive/口径/*.md"]
+"share/station/skills/video" = ["skills/video/*.json", "skills/video/*.md"]
+"share/station/skills/video/code" = ["skills/video/code/*.py"]
+"share/station/skills/video/prompts" = ["skills/video/prompts/*.md"]
+"share/station/skills/interview-coach" = ["skills/interview-coach/*.json", "skills/interview-coach/*.md"]
+"share/station/skills/interview-coach/code" = ["skills/interview-coach/code/*.py"]
+"share/station/skills/interview-coach/prompts" = ["skills/interview-coach/prompts/*.md"]
+"share/station/skills/weekly-report" = ["skills/weekly-report/*.json", "skills/weekly-report/*.md"]
+"share/station/skills/weekly-report/code" = ["skills/weekly-report/code/*.py"]
+"share/station/skills/demo-agent" = ["skills/demo-agent/*.json", "skills/demo-agent/*.md"]
+"share/station/skills/demo-pipe" = ["skills/demo-pipe/*.json", "skills/demo-pipe/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

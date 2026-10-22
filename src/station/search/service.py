@@ -11,7 +11,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from station import modelcfg
+from station.models import config as modelcfg
 from station.search import client
 
 CACHE_TTL = 300

@@ -13,6 +13,9 @@
 """
 from __future__ import annotations
 
+from station.persistence.repositories import attachments as attachment_records
+
+
 from station.core.tool import Tool
 
 
@@ -20,7 +23,7 @@ def t_skills(ctx) -> str:
     """列出这个工作站挂了哪些技能、各自能干什么。"""
     # 函数内 import：unified 会 import registry，registry 又要 import skills —— 顶层
     # 互相 import 容易绕成环，放进函数里就永远不会（Python 的循环导入老问题）。
-    from station.app.unified import build_skill_catalog
+    from station.chat.catalog import build_skill_catalog
     cats = build_skill_catalog()
     if not cats:
         return "当前没有挂载任何技能。"
@@ -55,8 +58,7 @@ def t_artifacts(ctx, limit: int = 20) -> str:
     mine = list(fs.iter_files(getattr(ctx, "user_id", "") or ""))
     mine.sort(key=lambda d: d.get("created", 0), reverse=True)      # 新的在前
     # 文档产物有独立 owner/版本目录，不塞回会覆盖 owner 的全局哈希旁车。
-    from station import db
-    documents = [d for d in db.document_list(getattr(ctx, "user_id", "") or "") if d.get("latest_run")]
+    documents = [d for d in attachment_records.document_list(getattr(ctx, "user_id", "") or "") if d.get("latest_run")]
     for document in documents:
         mine.insert(0, {"id": document["id"], "name": "orignChunk / " + document["date"] + " / " + document["name"] + ".zip",
                         "document_url": f"/api/documents/{document['id']}/archive"})

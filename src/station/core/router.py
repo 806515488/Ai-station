@@ -189,7 +189,7 @@ def l2_route(text: str, catalog: list, diag: dict | None = None,
         return None
     t0 = time.perf_counter()
     try:
-        from station import modelcfg
+        from station.models import config as modelcfg
         from station.core.intent import identify
         timeout = float(os.environ.get("ROUTE_TIMEOUT") or config.ROUTE_TIMEOUT)
         threshold = float(os.environ.get("ROUTE_THRESHOLD") or config.ROUTE_THRESHOLD)

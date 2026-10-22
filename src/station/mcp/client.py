@@ -10,7 +10,7 @@
 ★ 本文件最关键的一件事：**异步转同步**。
   官方的 `mcp` SDK 全是 `async def` / `async with`（Python 的 asyncio 异步模型，类比
   Java 的 CompletableFuture / 协程）。而本宿主的对话循环是**同步**的（跑在线程池的
-  工作线程里，见 app/server.py 的 gen()）。两者不能直接调：同步函数里 `await` 不了，
+  工作线程里，见 app/streaming.py 的工作线程适配）。两者不能直接调：同步函数里 `await` 不了，
   而在工作线程里现开一个事件循环（`asyncio.run`）又会和"连接是异步对象"打架。
 
   标准解法：**专门开一条后台线程，在那条线程里跑一个常驻的事件循环**（event loop =
@@ -83,7 +83,7 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
     """拿到那条后台事件循环；没有就现起一条（懒加载，全进程只有一条）。
 
     为什么要锁：第一次调用时可能好几个线程同时进来，不加锁会起出两三条循环线，
-    每条都有一部分连接 —— 那种 bug 极难查（同 db.py 里 `with _lock` 的理由）。
+    每条都有一部分连接 —— 那种 bug 极难查（同 Database 作用域保护共享连接的理由）。
     """
     global _loop, _loop_thread
     with _loop_lock:
@@ -267,7 +267,7 @@ def _content_to_text(res) -> str:
     ★★ `isError` 必须是**早返回**、而且**不截断** —— 这是既有行为，不是疏忽：
       对端说"这次失败了"时，那串错误详情要完整给模型看，它才好换个法子再试。
       拆分 _flatten/_clamp 时最容易顺手把它并进 _clamp，那样错误结果就会被悄悄截断，
-      **而现有测试一条都抓不到**（tests/test_mcp.py 里现在有一条专门钉它）。
+      **而现有测试一条都抓不到**（tests/services/test_mcp.py 里现在有一条专门钉它）。
     """
     text = _flatten(res)
     if getattr(res, "isError", False):

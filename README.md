@@ -7,7 +7,6 @@
 一个可持续挂能力的 **agent 宿主**：通用 agent 运行时 + 技能注册表 + 异步任务 + 文件产物 + Web UI。
 业务能力以「技能」形式热插拔 —— 宿主不认识业务，只认识技能。
 
-[![CI](https://github.com/806515488/Ai-station/actions/workflows/ci.yml/badge.svg)](https://github.com/806515488/Ai-station/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Dependencies](https://img.shields.io/badge/frontend-zero--dependency-orange)
@@ -40,7 +39,7 @@ station 的做法是把它们抽成**宿主基建**，需求侧只写一个**技
 - **工具命名空间作用域** —— 工具全名是 `<ns>.<tool>`。路由命中某个技能后，**只有该技能的工具对模型可见**，其他技能的工具根本不出现在 tool schema 里。技能多了也不会互相污染、不会白烧 token。
 - **in-band 批准闸** —— 危险工具（写文件、对外动作）被调用时**跨回合挂起**：agent 停下来向用户请求批准，用户下一条消息才决定执行还是拒绝。不是弹窗，是对话流里的一张卡片。
 - **渲染即工具** —— 工具返回 `{text, render}`：`text` 进模型的上下文，`render` 变成对话流里的卡片（表格 / 图 / 文件 / 待办…）。**UI 不是预先铺好的页面，而是 agent 的输出通道。**
-- **模型适配** —— 通用聊天走 `src/station/core/model.py`；意图识别支持普通聊天接口及 Jev System One 专用决策接口。
+- **模型适配** —— 通用聊天走 `src/station/models/client.py`；意图识别支持普通聊天接口及 Jev System One 专用决策接口。
 - **MCP 客户端** —— 接外部 MCP server 的工具。MCP 工具直接进工具的常驻面，和内置全局工具并排。
   - **安全边界**：用户能配的只有 `http` / `sse`（填个地址），**配不了 `stdio`** —— 那等于让服务器起任意进程，而这是个公网可达的站。内置服务才允许 stdio，且命令写死在代码里。
 
@@ -113,7 +112,7 @@ skills/<id>/
 git clone https://github.com/806515488/Ai-station.git && cd Ai-station
 
 cp .env.example src/.env     # 填任意一家的 API Key
-pip install -e ".[dev]"      # 需要 Python ≥ 3.11
+pip install -e ".[documents,docx]"  # 需要 Python ≥ 3.11
 
 station-web                  # → http://127.0.0.1:8001
 ```
@@ -226,9 +225,12 @@ def tools() -> list[Tool]:
 
 ```
 src/station/          宿主
-├── core/             agent 循环 · 工具 · 会话 · 事件 · 路由 · 模型适配
+├── core/             agent 循环 · 工具 · 会话 · 事件 · 路由
+├── models/           模型配置与目录 · 调用策略 · 协议适配 · 连接测试
 ├── skills/           技能注册表（扫目录装载）
-├── jobs/             异步任务（状态机 + 落盘 + 进度事件）
+├── tasks/            任务数据 · 执行与租约 · 用例 · 状态展示
+├── persistence/      数据库连接、事务、结构管理和领域仓库
+├── accounts.py       注册登录业务（SQL 在用户仓库）
 ├── tools/            全局工具（每个会话都注入）
 ├── mcp/              外部工具接入；保留的旧搜索 server 默认停用
 ├── search/           原生 DeepSeek Search/Fetch 适配、缓存和预算
@@ -236,29 +238,27 @@ src/station/          宿主
 ├── documents/        附件解析、清洗、质量检查、切块及持久化
 └── app/              FastAPI + static/index.html（单文件前端）
 
-src/archive/          第一个技能的业务实现
-├── domain/           领域模型与分类体系
-├── engine/           LangGraph 识别流水线
-├── service/ storage/ export/
-└── station_adapter.py  与宿主的接缝
+skills/archive/        自包含的档案技能
+├── manifest.json、system.md
+├── prompts/、口径/
+└── code/
+    ├── archive_tools.py   工具与接入入口
+    └── archive_core/      业务实现（Python 包）
+        ├── domain/       领域模型与分类体系
+        ├── engine/       LangGraph 识别流水线
+        ├── service/ storage/ export/
+        └── station_adapter.py
 
 skills/               技能开放目录
-tests/                离线单测
 ```
 
 ---
 
-## 🧪 测试
+## 📦 公开仓库范围
 
-```bash
-pytest -q                       # 全部离线，不联网、不烧 key、不碰真数据
-pytest -q -k 批准               # 按关键字挑
-pytest tests/test_deploy.py -q  # 单个文件
-```
-
-测试夹具会把数据目录与数据库（SQLite）都指到临时目录，所以**可以随便跑**，不会污染你的真实数据。
-真 PostgreSQL 那条路另有集成测试（`tests/test_postgres_integration.py`，默认跳过，给了
-`STATION_TEST_DATABASE_URL` 才跑）。
+公开仓库包含运行源码、技能及其提示词和规则资源、依赖声明、环境模板、部署文件与本说明。
+测试、内部维护文档、AI 工具配置、真实数据和本地凭据保留在维护仓库。
+新增技能可以参考 `skills/weekly-report` 的目录和注册格式。
 
 ---
 

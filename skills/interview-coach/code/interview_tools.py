@@ -1,11 +1,28 @@
 """interview-coach 技能入口：FFmpeg 指导 + 音频转写 + 后台执行器。"""
 from __future__ import annotations
 
+from station.tasks.runtime import load_job
+
+
+import interview_repository as interview_records
+
+
 import json
 import time
 from pathlib import Path
 
 from station.core.tool import Tool
+
+
+def task_recovery():
+    import interview_tasks
+    return interview_tasks
+
+
+def repository():
+    """面试数据访问入口；模块与技能一起加载，不要求宿主认识业务 Python 包。"""
+    import interview_repository
+    return interview_repository
 
 
 _SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -42,9 +59,8 @@ def _remember_interview(ctx, interview_id: str) -> None:
 
 def _current_interview(ctx) -> tuple[dict | None, str]:
     """取当前会话档案并做 owner 校验；没有就让用户显式创建/切换，绝不猜。"""
-    from station import db
     iid = _thread_interview_id(ctx)
-    row = db.interview_get(iid, _owner(ctx)) if iid else None
+    row = interview_records.interview_get(iid, _owner(ctx)) if iid else None
     if row is None:
         return None, "当前会话还没有选中面试档案。先说“新建一次面试”，或“列出我的面试”。"
     return row, ""
@@ -74,12 +90,11 @@ def _check_file(ctx, fid: str) -> tuple[str, str]:
 
 def _check_job(ctx, job_id: str):
     """校验任务属于当前用户；返回 (snapshot, error)。"""
-    from station import db
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     jid = (job_id or "").strip() or _thread_job_id(ctx)
     if not jid:
         return None, "这个会话还没有语音识别任务。"
-    row = db.job_load(jid)
+    row = load_job(jid)
     if row is None or getattr(row, "user_id", "") != _owner(ctx):
         return None, "找不到这个语音识别任务。"
     snap = get_manager().get(jid)
@@ -96,9 +111,8 @@ def ffmpeg_guide(ctx) -> str:
 def create_interview(ctx, title: str = "", company: str = "", role: str = "",
                      round_name: str = "") -> str:
     """新建并选中一份面试档案；日期暂取创建时间，用户可在对话里补充。"""
-    from station import db
     title = (title or "").strip() or time.strftime("%m-%d 面试")
-    row = db.interview_create(_owner(ctx), title, company=company, role=role,
+    row = interview_records.interview_create(_owner(ctx), title, company=company, role=role,
                               round_name=round_name, occurred_at=time.time())
     _remember_interview(ctx, row["id"])
     return f"已新建并选中「{row['title']}」（档案 {row['id']}）。现在可上传第一段面试音频。"
@@ -114,8 +128,7 @@ def create_interview(ctx, title: str = "", company: str = "", role: str = "",
 
 def list_interviews(ctx) -> str:
     """列出本人最近面试档案，让用户按标题/编号切换，避免多场面试串在一起。"""
-    from station import db
-    rows = db.interview_list(_owner(ctx))
+    rows = interview_records.interview_list(_owner(ctx))
     if not rows:
         return "还没有面试档案。说“新建一次面试”后再上传音频。"
     cur = _thread_interview_id(ctx)
@@ -129,9 +142,8 @@ def list_interviews(ctx) -> str:
 
 def select_interview(ctx, interview_id: str) -> str:
     """切换当前会话正在操作的面试档案；后续上传与转写都固定归到它。"""
-    from station import db
     iid = (interview_id or "").strip()
-    row = db.interview_get(iid, _owner(ctx))
+    row = interview_records.interview_get(iid, _owner(ctx))
     if row is None:
         return "找不到这份面试档案。先用“列出我的面试”查看可选编号。"
     _remember_interview(ctx, iid)
@@ -140,11 +152,10 @@ def select_interview(ctx, interview_id: str) -> str:
 
 def show_interview(ctx) -> str:
     """显示当前面试与多段录音的状态，便于决定继续上传、转写还是开始复盘。"""
-    from station import db
     row, err = _current_interview(ctx)
     if err:
         return err
-    recs = db.interview_recordings(row["id"], _owner(ctx))
+    recs = interview_records.interview_recordings(row["id"], _owner(ctx))
     try:
         speaker_map = json.loads(row.get("speaker_map") or "{}")
     except Exception:
@@ -167,14 +178,13 @@ def show_interview(ctx) -> str:
 
 def set_speakers(ctx, candidate_speaker: str, interviewer_speaker: str) -> str:
     """确认 ASR 的 speaker 编号归属；不确认就不应把 Q&A 草稿当成可靠事实。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
     candidate, interviewer = (candidate_speaker or "").strip(), (interviewer_speaker or "").strip()
     if not candidate.startswith("speaker_") or not interviewer.startswith("speaker_") or candidate == interviewer:
         return "请明确填写两个不同的 ASR 编号，例如 candidate_speaker=speaker_0、interviewer_speaker=speaker_1。"
-    db.interview_set_speaker_map(interview["id"], _owner(ctx), {
+    interview_records.interview_set_speaker_map(interview["id"], _owner(ctx), {
         candidate: "candidate", interviewer: "interviewer"})
     return f"已确认：{candidate} 是你，{interviewer} 是面试官。之后整理 Q&A 会按此归属。"
 
@@ -198,10 +208,9 @@ def ask_audio(ctx) -> dict:
 def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
     """提交后台语音识别任务，立即返回一张 job 进度卡。"""
     from station import config
-    from station.jobs.manager import get_manager
+    from station.tasks.executor import get_manager
     from station.skills.registry import get_registry
 
-    from station import db
 
     interview, err = _current_interview(ctx)
     if err:
@@ -212,11 +221,11 @@ def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
     _, err = _check_file(ctx, fid)
     if err:
         return err
-    recording = db.interview_recording_by_file(interview["id"], _owner(ctx), fid)
+    recording = interview_records.interview_recording_by_file(interview["id"], _owner(ctx), fid)
     if recording is None:
         # 兼容升级前已上传的音频：用户明确在当前面试里转写时，才把它补挂到这里。
         from station.files import store as fs
-        recording = db.interview_recording_add(interview["id"], _owner(ctx), fid,
+        recording = interview_records.interview_recording_add(interview["id"], _owner(ctx), fid,
                                                (fs.meta(fid) or {}).get("name") or "")
     if recording.get("status") == "transcribing" and recording.get("asr_job_id") and not force:
         return {"text": "这段音频正在转写中。",
@@ -234,13 +243,13 @@ def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
         return "语音识别执行器没有装载，重启工作站再试。"
     import uuid
     job_id=uuid.uuid4().hex[:16]
-    db.interview_recording_start(recording["id"], _owner(ctx), job_id)
+    interview_records.interview_recording_start(recording["id"], _owner(ctx), job_id)
     try:
         job = get_manager().submit(skill, {
             "file_id": fid, "interview_id": interview["id"], "recording_id": recording["id"],
         }, user_id=_owner(ctx),job_id=job_id)
     except Exception as exc:
-        db.interview_recording_finish(recording["id"],_owner(ctx),error_message=type(exc).__name__,expected_job_id=job_id)
+        interview_records.interview_recording_finish(recording["id"],_owner(ctx),error_message=type(exc).__name__,expected_job_id=job_id)
         raise
     _remember_job(ctx, job.id)
     return {
@@ -252,11 +261,10 @@ def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
 
 def retry_transcribe(ctx, recording_id: str = "") -> dict | str:
     """用户明确要求时重试一段卡住/失败的录音，新 job 会接管旧 job 的回写权。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    recs = db.interview_recordings(interview["id"], _owner(ctx))
+    recs = interview_records.interview_recordings(interview["id"], _owner(ctx))
     rec = next((r for r in recs if r["id"] == recording_id), None) if recording_id else (recs[-1] if recs else None)
     if rec is None:
         return "找不到要重试的录音。"
@@ -265,27 +273,25 @@ def retry_transcribe(ctx, recording_id: str = "") -> dict | str:
 
 def delete_recording(ctx, recording_id: str) -> str:
     """批准后删除一段录音及其转写；仅在没有其它面试记录引用时删物理文件。"""
-    from station import db
     from station.files import store as fs
-    files = db.interview_recording_delete((recording_id or "").strip(), _owner(ctx))
+    files = interview_records.interview_recording_delete((recording_id or "").strip(), _owner(ctx))
     if not files:
         return "找不到这段录音。"
     removed = []
     for fid in files:
-        if db.interview_file_references(fid, _owner(ctx)) == 0 and fs.remove(fid, _owner(ctx)):
+        if interview_records.interview_file_references(fid, _owner(ctx)) == 0 and fs.remove(fid, _owner(ctx)):
             removed.append(fid)
     return f"已删除录音记录；清理文件 {len(removed)}/{len(files)} 份。"
 
 
 def delete_interview(ctx, interview_id: str = "") -> str:
     """批准后删除整场面试；只清理已经没有其它面试引用的音频/转写文件。"""
-    from station import db
     from station.files import store as fs
     iid = (interview_id or _thread_interview_id(ctx) or "").strip()
-    files = db.interview_delete(iid, _owner(ctx))
+    files = interview_records.interview_delete(iid, _owner(ctx))
     if not files:
         return "找不到这份面试档案。"
-    removed = sum(1 for fid in files if db.interview_file_references(fid, _owner(ctx)) == 0 and fs.remove(fid, _owner(ctx)))
+    removed = sum(1 for fid in files if interview_records.interview_file_references(fid, _owner(ctx)) == 0 and fs.remove(fid, _owner(ctx)))
     if iid == _thread_interview_id(ctx):
         _remember_interview(ctx, "")
     return f"已删除面试档案及关联记录；清理文件 {removed}/{len(files)} 份。"
@@ -293,9 +299,8 @@ def delete_interview(ctx, interview_id: str = "") -> str:
 
 def compare_interviews(ctx, interview_ids: list | None = None) -> str:
     """把用户明确选择的多场面试 Q&A 交给教练做横向洞察；不自动读取全部隐私档案。"""
-    from station import db
     ids = [str(x) for x in (interview_ids or []) if str(x)]
-    rows = db.interview_questions_across(_owner(ctx), ids)
+    rows = interview_records.interview_questions_across(_owner(ctx), ids)
     if not rows:
         return "所选面试没有已保存的 Q&A。先整理并确认题目，再做跨面试比较。"
     lines = ["跨面试 Q&A（请仅基于以下内容总结重复弱点、进步和练习方向）："]
@@ -320,12 +325,11 @@ def job_status(ctx, job_id: str = "") -> str:
 
 def transcript(ctx, job_id: str = "", recording_id: str = "") -> str:
     """读取当前面试的一段或全部已完成转写；多段音频按用户确认顺序合并。"""
-    from station import db
     from station.files import store as fs
     interview, err = _current_interview(ctx)
     if err:
         return err
-    recs = db.interview_recordings(interview["id"], _owner(ctx))
+    recs = interview_records.interview_recordings(interview["id"], _owner(ctx))
     if recording_id:
         recs = [r for r in recs if r["id"] == recording_id]
     elif job_id:
@@ -361,11 +365,10 @@ def transcript(ctx, job_id: str = "", recording_id: str = "") -> str:
 
 def list_questions(ctx) -> str:
     """列当前面试的 Q&A 草稿和已复盘题，让用户选择下一道要讨论的题。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    rows = db.interview_question_list(interview["id"], _owner(ctx))
+    rows = interview_records.interview_question_list(interview["id"], _owner(ctx))
     if not rows:
         return "当前面试还没有整理出题目。先读取转写稿；确认问答无误后，我会保存题目草稿。"
     lines = [f"「{interview['title']}」的题目："]
@@ -376,38 +379,34 @@ def list_questions(ctx) -> str:
 
 
 def edit_question(ctx, question_id: str, question_text: str, answer_text: str, category: str = "", followup_text: str = "") -> str:
-    from station import db
-    q = db.interview_question_get(question_id, _owner(ctx))
+    q = interview_records.interview_question_get(question_id, _owner(ctx))
     if not q or q["interview_id"] != (_thread_interview_id(ctx) or ""):
         return "找不到当前面试的这道题。"
     try:
-        db.interview_question_update(question_id, _owner(ctx), question_text=question_text, answer_text=answer_text,
+        interview_records.interview_question_update(question_id, _owner(ctx), question_text=question_text, answer_text=answer_text,
                                      category=category, followup_text=followup_text)
     except ValueError as e: return str(e)
     return "已更新题目草稿。"
 
 
 def merge_questions(ctx, keep_id: str, merge_id: str) -> str:
-    from station import db
-    try: q = db.interview_question_merge(keep_id, merge_id, _owner(ctx))
+    try: q = interview_records.interview_question_merge(keep_id, merge_id, _owner(ctx))
     except ValueError as e: return str(e)
     return f"已合并为第 {q['sequence']} 题。"
 
 
 def split_question(ctx, question_id: str, first_question: str, first_answer: str, second_question: str, second_answer: str) -> str:
-    from station import db
-    try: pair = db.interview_question_split(question_id, _owner(ctx), first_question=first_question, first_answer=first_answer, second_question=second_question, second_answer=second_answer)
+    try: pair = interview_records.interview_question_split(question_id, _owner(ctx), first_question=first_question, first_answer=first_answer, second_question=second_question, second_answer=second_answer)
     except ValueError as e: return str(e)
     return "已拆成两道题。" if pair else "拆分失败：第二题与已有题重复或内容为空。"
 
 
 def save_questions(ctx, items: list) -> str:
     """保存经模型提取、并准备让用户校正的 Q&A 草稿；重复题自动跳过。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    added = db.interview_question_add_many(interview["id"], _owner(ctx), items or [])
+    added = interview_records.interview_question_add_many(interview["id"], _owner(ctx), items or [])
     if not added:
         return "没有保存新题目：每项都需要同时包含 question_text 和 answer_text，或与已有草稿重复。"
     lines = [f"已为「{interview['title']}」保存 {len(added)} 道 Q&A 草稿，请用户核对："]
@@ -417,18 +416,17 @@ def save_questions(ctx, items: list) -> str:
 
 def show_question(ctx, question_id: str) -> str:
     """读当前面试的一题及其复盘版本，供逐题讨论前精确定位，不跨面试取数。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    q = db.interview_question_get((question_id or "").strip(), _owner(ctx))
+    q = interview_records.interview_question_get((question_id or "").strip(), _owner(ctx))
     if q is None or q["interview_id"] != interview["id"]:
         return "找不到当前面试的这道题。先列出当前面试题目再选择。"
     lines = [f"第 {q['sequence']} 题 [{q['status']}]", f"问题：{q['question_text']}",
              f"原回答：{q['answer_text']}"]
     if q.get("followup_text"):
         lines.append(f"追问：{q['followup_text']}")
-    reviews = db.interview_reviews(q["id"], _owner(ctx))
+    reviews = interview_records.interview_reviews(q["id"], _owner(ctx))
     if reviews:
         latest = reviews[0]
         lines.append(f"最近复盘（第 {latest['version']} 版）：{latest['coach_feedback']}")
@@ -437,28 +435,26 @@ def show_question(ctx, question_id: str) -> str:
 
 def confirm_question(ctx, question_id: str) -> str:
     """用户确认 Q&A 草稿无误后标记 confirmed；后续重新提取不应覆盖它。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    q = db.interview_question_get((question_id or "").strip(), _owner(ctx))
+    q = interview_records.interview_question_get((question_id or "").strip(), _owner(ctx))
     if q is None or q["interview_id"] != interview["id"]:
         return "找不到当前面试的这道题。"
-    db.interview_question_set_status(q["id"], _owner(ctx), "confirmed")
+    interview_records.interview_question_set_status(q["id"], _owner(ctx), "confirmed")
     return f"已确认第 {q['sequence']} 题。之后可以开始逐题复盘。"
 
 
 def save_review(ctx, question_id: str, self_reflection: str = "", coach_feedback: str = "",
                 improved_answer: str = "", drill_prompt: str = "") -> str:
     """把一轮单题复盘追加为新版本；不覆盖旧版本，保留练习过程。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    q = db.interview_question_get((question_id or "").strip(), _owner(ctx))
+    q = interview_records.interview_question_get((question_id or "").strip(), _owner(ctx))
     if q is None or q["interview_id"] != interview["id"]:
         return "找不到当前面试的这道题，不能保存复盘。"
-    review = db.interview_review_add(
+    review = interview_records.interview_review_add(
         q["id"], _owner(ctx), self_reflection=self_reflection, coach_feedback=coach_feedback,
         improved_answer=improved_answer, drill_prompt=drill_prompt, source="ai")
     if review is None:
@@ -468,12 +464,11 @@ def save_review(ctx, question_id: str, self_reflection: str = "", coach_feedback
 
 def add_action(ctx, title: str, detail: str = "", question_id: str = "") -> str:
     """记录下一次面试前的练习行动项，可选关联当前面试的一题。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
     try:
-        action = db.interview_action_add(interview["id"], _owner(ctx), title,
+        action = interview_records.interview_action_add(interview["id"], _owner(ctx), title,
                                          detail=detail, question_id=question_id)
     except ValueError as e:
         return str(e)
@@ -482,11 +477,10 @@ def add_action(ctx, title: str, detail: str = "", question_id: str = "") -> str:
 
 def list_actions(ctx, status: str = "") -> str:
     """查看当前面试的行动项，默认列全部；可按 todo/doing/done/dismissed 过滤。"""
-    from station import db
     interview, err = _current_interview(ctx)
     if err:
         return err
-    rows = db.interview_actions(interview["id"], _owner(ctx), status=status)
+    rows = interview_records.interview_actions(interview["id"], _owner(ctx), status=status)
     if not rows:
         return "当前面试还没有行动项。"
     text = "\n".join(["当前面试行动项："] + [f"- {a['id']} · [{a['status']}] {a['title']}" for a in rows])
@@ -495,9 +489,8 @@ def list_actions(ctx, status: str = "") -> str:
 
 def set_action_status(ctx, action_id: str, status: str) -> str:
     """更新当前账号自己的行动项状态，例如完成一次模拟追问后标为 done。"""
-    from station import db
     try:
-        action = db.interview_action_set_status((action_id or "").strip(), _owner(ctx), status)
+        action = interview_records.interview_action_set_status((action_id or "").strip(), _owner(ctx), status)
     except ValueError as e:
         return str(e)
     if action is None:
@@ -510,7 +503,6 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
     from station.files import share
     from station.files import store as fs
 
-    from station import db
 
     fid = (file_id or "").strip()
     if not fid:
@@ -518,7 +510,7 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
     if not fs.path(fid) and not (getattr(ctx,'task_recovery',{}) or {}).get('remote_id'):
         raise ValueError("音频文件不存在")
     owner = _owner(ctx)
-    recording = db.interview_recording_get(recording_id, owner)
+    recording = interview_records.interview_recording_get(recording_id, owner)
     if recording is None or recording.get("interview_id") != interview_id or recording.get("file_id") != fid:
         raise ValueError("音频与面试档案归属不一致")
     recovery=getattr(ctx,"task_recovery",{}) or {}
@@ -548,7 +540,7 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
             group_label="面试转写结果",
             extra={"purpose": "interview_transcript"},
         )
-        db.interview_recording_finish(recording_id, owner, transcript_file_id=tfid,
+        interview_records.interview_recording_finish(recording_id, owner, transcript_file_id=tfid,
                                       asr_model=str(result.get("model") or ""),
                                       expected_job_id=ctx.job_id or "")
         yield {"type": "artifact", "id": tfid}
@@ -556,7 +548,7 @@ def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: s
                "text": f"transcript segments={len(result.get('segments') or [])}"}
         yield {"type": "progress", "percent": 100, "message": "转写完成"}
     except Exception as e:                    # noqa：任务失败也要让档案卡知道哪段失败了
-        db.interview_recording_finish(recording_id, owner, error_message=f"{type(e).__name__}: {e}",
+        interview_records.interview_recording_finish(recording_id, owner, error_message=f"{type(e).__name__}: {e}",
                                       expected_job_id=ctx.job_id or "")
         raise
     finally:

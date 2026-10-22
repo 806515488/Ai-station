@@ -29,7 +29,7 @@ def fetch(ctx, url, offset=0, max_chars=8000):
 
 
 def available(user_id):
-    from station import modelcfg
+    from station.models import config as modelcfg
     try:
         return modelcfg.search_entry(user_id)[0] is not None
     except Exception:

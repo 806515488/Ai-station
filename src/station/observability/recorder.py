@@ -5,6 +5,9 @@ isolated_stream，后台任务则显式 activate，防止不同用户的追踪�
 """
 from __future__ import annotations
 
+from station.persistence.repositories import traces as trace_records
+
+
 import contextvars
 import hashlib
 import json
@@ -14,7 +17,7 @@ import time
 import uuid
 from contextlib import contextmanager
 
-from station import config, db
+from station import config
 
 _active = contextvars.ContextVar('station_trace', default=None)
 _step = contextvars.ContextVar('station_span', default=None)
@@ -84,7 +87,7 @@ class Trace:
     def save(self):
         try:
             self.record['incomplete'] = self.incomplete
-            self.record = db.trace_save(self.record)
+            self.record = trace_records.trace_save(self.record)
         except Exception:
             self.incomplete = True
             logging.getLogger(__name__).warning('trace write unavailable', exc_info=False)
@@ -106,7 +109,7 @@ def begin(user_id, thread_id, *, key='', kind='chat', origin='', attributes=None
                  'attributes': _safe(attributes or {}), 'active_ms': 0,
                  'first_text_ms': None, 'incomplete': False}
         value['instance_id'] = instance_id()
-        record = db.trace_create(value, key)
+        record = trace_records.trace_create(value, key)
         trace = Trace(record)
         trace.record.update(boot_id=BOOT_ID, instance_id=value['instance_id'])
         trace.save()
@@ -137,7 +140,7 @@ def finish(trace, state):
     if not trace:
         return
     try:
-        record = db.trace_finish(trace.record['id'], trace.record['user_id'], state,
+        record = trace_records.trace_finish(trace.record['id'], trace.record['user_id'], state,
                                  (time.monotonic()-trace.started)*1000, trace.incomplete)
         if record:
             trace.record = record
@@ -173,7 +176,7 @@ class Step:
         if not self.trace:
             return
         try:
-            db.trace_span_save(self.record)
+            trace_records.trace_span_save(self.record)
         except Exception:
             self.trace.incomplete = True
 
