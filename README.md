@@ -37,7 +37,7 @@ station 的做法是把它们抽成**宿主基建**，需求侧只写一个**技
 ### 自研 agent harness
 
 - **工具命名空间作用域** —— 工具全名是 `<ns>.<tool>`。路由命中某个技能后，**只有该技能的工具对模型可见**，其他技能的工具根本不出现在 tool schema 里。技能多了也不会互相污染、不会白烧 token。
-- **in-band 批准闸** —— 危险工具（写文件、对外动作）被调用时**跨回合挂起**：agent 停下来向用户请求批准，用户下一条消息才决定执行还是拒绝。不是弹窗，是对话流里的一张卡片。
+- **in-band 批准闸** —— 危险工具（写文件、对外动作）被调用时**跨回合挂起**：agent 停下来向用户请求批准，用户下一条消息才决定执行还是拒绝。确认绑定独立操作 ID，数据库原子领取防止同一操作重复处理；已领取但结果不明时不自动重放。通过对话流卡片展示。
 - **渲染即工具** —— 工具返回 `{text, render}`：`text` 进模型的上下文，`render` 变成对话流里的卡片（表格 / 图 / 文件 / 待办…）。**UI 不是预先铺好的页面，而是 agent 的输出通道。**
 - **模型适配** —— 通用聊天走 `src/station/models/client.py`；意图识别支持普通聊天接口及 Jev System One 专用决策接口。
 - **MCP 客户端** —— 接外部 MCP server 的工具。MCP 工具直接进工具的常驻面，和内置全局工具并排。
@@ -71,7 +71,6 @@ skills/<id>/
 - **按模型配置能力** —— 「来源与模型」统一保存地址和 Key，一个来源可添加多个模型；「功能分配」按对话、意图、识图、语音、视频选择具体模型及主备顺序。参数按能力显示，逐模型测试，连接设置默认折叠。
 - **可选 Jev 意图识别** —— 在模型配置中添加 OpenCode Zen · Jev，填 Key 后加入意图识别顺序。使用 `jev-1.13-free` 和专用 `/systemone` 接口，保留原模型作备用；免费模型限时提供，不自动切换付费版本。
 - **原生网页检索** —— 全局 `web.search` / `web.fetch` 直接调用官方 DeepSeek Search/Fetch，复用本人来源的 Key，支持连接复用、短期缓存和长文分页。模型配置中可开关、选择来源并测试搜索；旧 Bing 等 HTML 搜索 MCP 默认停用，其他 MCP 不受影响。
-- **通用文档附件** —— LangChain Loader → Unstructured 基础清洗 → 完整解析与独立切块；支持 TXT/MD、CSV/TSV、文字 PDF、DOCX、基础 XLSX/HTML。结果按 `orignChunk / 日期 / 文档 / 版本` 保存，可预览和下载；首版不包含 OCR、复杂表格重建或向量库写入。
 - **异步任务** —— `queued → running → done | failed`，进度事件落盘、前端轮询、产物进文件区。崩了重启能找回。
 - **重活闸** —— 全站同一时刻只跑 N 件吃内存的任务（默认 1）。把 OOM 从「服务无告警消失」变成可控排队，且排队原因对用户可见。
 - **产物区 + 预览** —— 生成的文件按产出分组，对话里可点开、可下载。
@@ -112,7 +111,7 @@ skills/<id>/
 git clone https://github.com/806515488/Ai-station.git && cd Ai-station
 
 cp .env.example src/.env     # 填任意一家的 API Key
-pip install -e ".[documents,docx]"  # 需要 Python ≥ 3.11
+pip install -e ".[docx]"  # 需要 Python ≥ 3.11
 
 station-web                  # → http://127.0.0.1:8001
 ```
@@ -127,13 +126,6 @@ STATION_FAKE=1 station-web
 
 ```bash
 PYTHONPATH=src python -m station.app.server
-```
-
-启用文档附件需在联网准备阶段安装组件并准备本地资源，之后解析、清洗和切块可离线运行：
-
-```bash
-pip install -e ".[documents]"
-python scripts/prepare_document_resources.py
 ```
 
 ---
@@ -225,7 +217,9 @@ def tools() -> list[Tool]:
 
 ```
 src/station/          宿主
-├── core/             agent 循环 · 工具 · 会话 · 事件 · 路由
+├── core/             纯 Agent 循环 · 工具/消息契约 · 通用执行规则
+├── conversation/     普通聊天 · 历史准备 · 检查点与可靠收尾
+├── chat/             共用回答 · 意图路由 · 模型/工具/上下文装配
 ├── models/           模型配置与目录 · 调用策略 · 协议适配 · 连接测试
 ├── skills/           技能注册表（扫目录装载）
 ├── tasks/            任务数据 · 执行与租约 · 用例 · 状态展示
@@ -235,7 +229,6 @@ src/station/          宿主
 ├── mcp/              外部工具接入；保留的旧搜索 server 默认停用
 ├── search/           原生 DeepSeek Search/Fetch 适配、缓存和预算
 ├── files/            产物区
-├── documents/        附件解析、清洗、质量检查、切块及持久化
 └── app/              FastAPI + static/index.html（单文件前端）
 
 skills/archive/        自包含的档案技能
@@ -279,7 +272,6 @@ docker compose up -d --build
   库文件在 `data/station/station.db`）。老的 SQLite 数据用 `station-migrate-postgres` 一次性导入
 - `mem_limit` 给一个 cgroup 硬上限：超了死的是容器、一眼看得出；没有它内核会在宿主机上**随机挑受害者**
 - `.dockerignore` 把 `data/`、`samples/` 挡在镜像外（镜像层删不干净，数据绝不能烤进去）
-- 附件 NLTK 资源需要预先准备到宿主机 `/srv/station/nltk`，由 Compose 只读挂到 `/opt/station-nltk`。可运行 `python scripts/prepare_document_resources.py --output-dir /srv/station/nltk`；离线服务器需从同平台准备环境复制资源。
 - 既有 PostgreSQL 缺表时，先停掉所有应用实例，再执行 `docker compose run --rm --no-deps station station-upgrade-postgres`，最后起站；应用启动不会隐式升级已有库。仅新增 Jev 配置不需要升级数据库。
 
 ---

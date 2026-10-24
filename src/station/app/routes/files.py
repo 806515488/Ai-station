@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-from station.persistence.repositories import attachments as attachment_records
 from station.persistence.repositories import shares as share_records
 
 
@@ -75,18 +74,12 @@ def _group_products(files: list) -> list:
 
 
 @router.get("/api/files")
-def list_files(request: Request, document_offset: int = 0):
+def list_files(request: Request):
     """当前登录用户的产物组（我的产物抽屉数据源）。"""
     u = require_user(request)
     from station.files import store as fs       # 函数内 import，保持 server 顶层轻量
     mine = [f for f in fs.iter_files(u["id"])]  # owner 已由 store 过滤（历史文件兼容可见）
-    from station.documents.service import view
-    if document_offset < 0 or document_offset > 1000000:
-        raise HTTPException(400, "文档分页位置无效")
-    documents = attachment_records.document_list(u["id"], 101, document_offset)
-    return {"groups": _group_products(mine),
-            "documents": [view(d) for d in documents[:100] if d.get("runs")],
-            "next_document_offset": document_offset + 100 if len(documents) > 100 else None}
+    return {"groups": _group_products(mine)}
 
 
 @router.get("/api/files/{fid}")

@@ -34,7 +34,7 @@ class FakeModel:
         return ""
 
     def respond(self, msgs: list[dict], tools=None) -> dict:
-        by_leaf = {t.leaf(): t for t in tools or []}   # 叶子名 → 工具对象
+        by_leaf = {t.name.rsplit(".", 1)[-1]: t for t in tools or []}   # 只消费模型工具协议
         last = msgs[-1] if msgs else {}
 
         # 情形一：历史最后一条是“工具结果”→ 看要不要接着调下一个工具

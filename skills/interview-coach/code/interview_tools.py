@@ -119,7 +119,7 @@ def create_interview(ctx, title: str = "", company: str = "", role: str = "",
 
 
 # ★★ 下面所有工具的返回文字里，id 一律给**完整值**，不许 [:8] 截断。
-#   原因：宿主 core/agent.run_tool 只把返回值的 `text` 交给模型，`render` 只发给前端 ——
+#   原因：宿主 chat/tool_execution.run_tool 只把返回值的 `text` 交给模型，`render` 只发给前端 ——
 #   模型看不见卡片里的完整 id。而 select_interview / show_question / set_action_status
 #   这些"按 id 操作"的工具要的是完整 id。列表里给 8 位截断 id，模型就永远无法把它交给
 #   这些工具，只能一遍遍重列（线上真发生过：模型自己都打出"列表里给我的是截断编号"）。

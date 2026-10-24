@@ -431,7 +431,7 @@ def call_tool(spec: ServerSpec, name: str, args: dict | None = None,
     返回**两种**东西：
       · `str` —— 普通结果（老路径，一切照旧，逐字节没变）。
       · `dict` —— 命中表单卡：`{"text": 给模型的短提示, "render": 卡片}`。
-        这个 dict 的形状就是宿主的渲染契约（见 core/agent.run_tool），由 bridge 转发。
+        这个 dict 的形状就是宿主的渲染契约（见 chat/tool_execution.run_tool），由 bridge 转发。
 
     失败一律抛 `McpError`（含超时的 `McpTimeout`）—— 由调用方决定怎么讲给用户听。
     """
@@ -451,7 +451,7 @@ def call_tool(spec: ServerSpec, name: str, args: dict | None = None,
         raw = _flatten(res)
         if _looks_like_iframe(raw):
             if len(raw) > MAX_CARD:
-                # ★★ 拒绝也必须带 `render`：core/agent.run_tool 里，dict 的 render 若产出
+                # ★★ 拒绝也必须带 `render`：chat/tool_execution.run_tool 里，dict 的 render 若产出
                 #    0 张有效卡，会**穿透到 `str(out)`**，把 Python repr 原样漏给模型
                 #    （模型会读到 `{'text': '...'}` 这种东西）。发一张说明卡，顺带也让
                 #    用户**确定性地**看见为什么没渲染 —— 只靠 tool 结果是赌模型会转述。

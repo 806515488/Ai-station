@@ -1,7 +1,7 @@
 """SQLite 初始化与旧结构补列；只接收显式连接，避免访问任何全局连接。"""
 from __future__ import annotations
 import sqlite3
-from .tables import _document_schema, _trace_schema, _task_schema
+from .tables import _trace_schema, _task_schema
 
 def init_db(c: sqlite3.Connection) -> None:
     """建表（IF NOT EXISTS：已有库重复启动也不炸、不丢数据）。"""
@@ -183,7 +183,7 @@ def init_db(c: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_reviews_question_version ON interview_reviews(question_id, version DESC);
     CREATE INDEX IF NOT EXISTS idx_actions_interview_status_updated ON interview_actions(interview_id, status, updated DESC);
     """)
-    for statement in _document_schema() + _trace_schema() + _task_schema():
+    for statement in _trace_schema() + _task_schema():
         c.execute(statement)
     _migrate(c)
     c.commit()

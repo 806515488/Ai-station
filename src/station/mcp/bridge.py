@@ -1,7 +1,7 @@
 """桥：把 MCP server 的工具接进**工具面**（不走路由）。
 
 新手视角（Java 朋友版）：
-  模型每轮手上有一份"工具清单"（见 `core/agent.py` 的 `tools_for`）。这里干的事就是
+  模型每轮手上有一份"工具清单"（见 `chat/tool_sources.py` 的 `tools_for`）。这里干的事就是
   「翻译」：把「一个连得上的 MCP server + 它上次报上来的工具清单」翻译成宿主的
   `Tool` 对象，塞进那份清单。翻译完，模型每轮都直接看得见它们、想用就调。
 
@@ -26,7 +26,7 @@
   SQLite 读。
 
 工具命名约定：`mcp.<服务id>.<工具名>`。`owner` 记成 `mcp.<服务id>` ——
-**不能写成 `station`**，那是全局工具的命名空间，而 `agent._GLOBAL_TOOL_CAP`
+**不能写成 `station`**，那是全局工具的命名空间，而 `tool_sources.GLOBAL_TOOL_CAP`
 会按它限流（"看一眼"性质的工具一轮最多 3 次）；搜索这类工具是正经业务调用，不该被限。
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _make_runner(server_id: str, tool_name: str):
         try:
             # ★ 这里**原样转发**，不做二次加工：call_tool 可能返回字符串（普通结果），
             #   也可能返回 {"text": …, "render": …}（表单卡，见 client._iframe_payload）。
-            #   后者正是宿主的渲染契约形状（core/agent.run_tool 认的就是它），
+            #   后者正是宿主的渲染契约形状（chat/tool_execution.run_tool 认的就是它），
             #   所以在这一层没有任何事要做 —— 桥只负责转发。
             # ★★ 安全性质：卡片 `type` 是 client 里**写死的字面量**，MCP server 只能决定
             #    `src` 和 `height`。**绝不能**把对端返回的结构化内容直接当成卡片消息

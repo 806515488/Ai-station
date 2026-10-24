@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-from station.persistence.repositories import attachments as attachment_records
 
 
 from station.core.tool import Tool
@@ -57,16 +56,11 @@ def t_artifacts(ctx, limit: int = 20) -> str:
     from station.files import store as fs
     mine = list(fs.iter_files(getattr(ctx, "user_id", "") or ""))
     mine.sort(key=lambda d: d.get("created", 0), reverse=True)      # 新的在前
-    # 文档产物有独立 owner/版本目录，不塞回会覆盖 owner 的全局哈希旁车。
-    documents = [d for d in attachment_records.document_list(getattr(ctx, "user_id", "") or "") if d.get("latest_run")]
-    for document in documents:
-        mine.insert(0, {"id": document["id"], "name": "orignChunk / " + document["date"] + " / " + document["name"] + ".zip",
-                        "document_url": f"/api/documents/{document['id']}/archive"})
     if not mine:
         return "还没有产物。档案出件、周报导出之后会出现在这里。"
     n = max(1, min(int(limit or 20), 50))
     files = [{"name": d.get("name") or d["id"],
-              "url": d.get("document_url") or f"/api/files/{d['id']}?dl=1"} for d in mine[:n]]
+              "url": f"/api/files/{d['id']}?dl=1"} for d in mine[:n]]
     # ★ 把"我只能做到这一步"写进**返回值**，而不只是工具描述里 —— 返回值模型每轮都读得到，
     #   描述只是"事先的说明"。09-13 实测教训：模型会顺着"有 47 个产物"主动提出
     #   "要不要我按周报/4件套分类过滤一下"，而它根本没有这个能力 —— 这里把话说死，
@@ -76,7 +70,7 @@ def t_artifacts(ctx, limit: int = 20) -> str:
         more = (f"，这里只列了**最近 {len(files)} 个**；本工具**不能按类型过滤**，"
                 f"要按产出分组翻全部，让用户打开界面右上角的「我的产物」抽屉")
     return {"text": f"共 {len(mine)} 个产物{more}。",
-            # render 契约见 core/agent.run_tool：带 render 的 dict 会被拆成
+            # render 契约见 chat/tool_execution.run_tool：带 render 的 dict 会被拆成
             # "给模型的文字 + 给前端的卡片"。file-card 是前端已有的渲染器。
             "render": {"type": "file-card", "files": files,
                        "note": f"我的产物（{len(mine)} 个）"}}
@@ -86,7 +80,8 @@ def tools() -> list[Tool]:
     """本组工具清单。"""
     return [
         Tool(name="skills", label="看看会干啥",
-             description="列出这个工作站挂载的所有技能和它们能做的事。用户问'你能干什么/有没有XX功能'时用它，别凭空猜。",
+             description="核对工作站当前挂载的技能及用途。系统提示已提供能力概览，普通自我介绍直接回答；"
+                         "需要核对最新目录或某项能力是否已挂载时再调用。此工具不会切换技能或增加本轮工具。",
              run=t_skills, args=[]),
 
         Tool(name="artifacts", label="看我的产物",

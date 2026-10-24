@@ -23,7 +23,7 @@ Thread 会话天然对应"手头这卷"。多卷并行是 §9 开放问题，初
 
 渲染契约（渲染即工具）：工具想给人看东西，返回
   {"text": 给模型看的一句结论, "render": {"type": ..., ...}}
-宿主 agent 循环把 render 转成 EV_RENDER 事件推给前端（见 core/agent.run_tool）。
+宿主 agent 循环把 render 转成 EV_RENDER 事件推给前端（见 chat/tool_execution.run_tool）。
 """
 from __future__ import annotations
 

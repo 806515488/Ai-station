@@ -132,8 +132,7 @@ def task_job_list(user_id: str, before: tuple | None = None, limit: int = 51) ->
 def task_records_many(kind: str, user_id: str, ids: list) -> dict:
     """固定表白名单的批量读取，列表页不为每个任务单独往返远程数据库。"""
     with database.session() as connection:
-        table,column={"control":("station_task_control","job_id"),"turn":("station_attachment_turns","id"),
-                      "document":("station_documents","id")}[kind]
+        table,column={"control":("station_task_control","job_id")}[kind]
         values=list(dict.fromkeys(i for i in ids if i))[:2000]
         result={}
         for offset in range(0,len(values),200):

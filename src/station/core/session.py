@@ -8,7 +8,7 @@
     role=tool 的消息就是“工具执行结果”，模型靠它接着想。
   - 为什么每次对话要带整本历史？因为模型没记忆 —— 你每说一句，都要把“到目前为止
     聊了什么 + 工具结果”整包发给它，它才知道上下文。
-  - pending：危险工具跨回合“请求→允许/拒绝”时，把待批准信息挂这里（见 chat/approvals.py 的
+  - pending：危险工具跨回合“请求→允许/拒绝”时，把待批准信息挂这里（见 chat/service.py 的
     in-band 批准逻辑和 core/agent.py 的批准闸）。
 """
 from __future__ import annotations
@@ -38,6 +38,7 @@ class Thread:
         self.updated = _now()
         self.created = self.updated                    # 建会话时间（DB 列用）
         self.user_id = ""                              # 归属用户（server 填）
+        self._version = None  # 仓库原始快照；保存时防止旧请求覆盖新审批状态，不写进 meta。
 
     # ── 消息 ──
     def add(self, msg: dict):
@@ -72,8 +73,11 @@ class Thread:
         """
         from station import observability as obs
         trace = obs.current()
-        self.meta["pending"] = {"trace_id": trace.record['id'] if trace else "", "tool": tool, "arguments": arguments,
+        approval_id = uuid.uuid4().hex
+        self.meta["pending"] = {"id": approval_id, "state": "waiting",
+                                "trace_id": trace.record['id'] if trace else "", "tool": tool, "arguments": arguments,
                                 "preview": preview, "at": _now()}
+        return approval_id
 
     def clear_pending(self):
         """用户回答完（允许或拒绝）就清掉，别让下次对话误触发。"""
@@ -81,13 +85,13 @@ class Thread:
 
     # ── 持久化（记录交给 persistence/repositories/threads；root 保留兼容）──
     def save(self, root: Path | None = None):
-        """把整个 Thread 存进 SQLite（threads 表）。
+        """把整个 Thread 交给仓库保存（threads 表，生产 PostgreSQL / 本地 SQLite）。
 
         root 参数已废弃（历史签名兼容）：传了也不走文件——测试里要隔离数据库，
         conftest 用 database.reset() 关闭连接并切到临时 SQLite。
         """
         from station.persistence.repositories import threads
-        threads.thread_save(self.to_record())
+        self._version = threads.thread_save(self.to_record(), expected=self._version)
 
     def to_record(self) -> dict:
         """向仓库交纯数据，持久层不反向 import Thread。"""
@@ -96,7 +100,7 @@ class Thread:
 
     @classmethod
     def load(cls, thread_id: str, root: Path | None = None) -> "Thread | None":
-        """按 id 从 SQLite 读回一个 Thread；没有返回 None。
+        """按 id 从当前配置的数据库读回一个 Thread；没有返回 None。
 
         @classmethod：以“类”调用 Thread.load(...)，第一个参数自动是类本身(cls)。
         """
@@ -104,10 +108,16 @@ class Thread:
         record = threads.thread_load(thread_id)
         if record is None:
             return None
+        return cls.from_record(record)
+
+    @classmethod
+    def from_record(cls, record: dict) -> "Thread":
+        """从已读取/原子领取的仓库记录构建对象，保留其保存版本。"""
         thread = cls(skill_id=record["skill_id"], thread_id=record["id"])
         thread.msgs, thread.meta = record["msgs"], record["meta"]
         thread.user_id = record["user_id"]
         thread.created, thread.updated = record["created"], record["updated"]
+        thread._version = record.get("_version")
         return thread
 
 

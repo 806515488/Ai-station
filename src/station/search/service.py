@@ -31,10 +31,10 @@ class Budget:
 
 
 def budget_for(ctx):
-    value = getattr(ctx, "web_budget", None)
+    value = getattr(ctx, "_search_budget", None)
     if not isinstance(value, Budget):
         value = Budget()
-        ctx.web_budget = value
+        ctx._search_budget = value
     return value
 
 

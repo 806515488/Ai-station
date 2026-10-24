@@ -1,6 +1,7 @@
 """选择本轮助手：L1/L2 判定、活跃技能保护，以及批准工具的归属反查。
 
-这里只选择“谁来执行”，不执行模型或工具。具体判词继续复用 core.router。
+这里只选择“谁来回答”，可能调用意图识别模型，但不调用主回答模型或业务工具。
+具体判词继续复用 core.router；返回选择结果后，再由 assembly 装配并进入 Loop。
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from station.chat.catalog import build_generic_agent, get_skill
 
 @dataclass
 class Selection:
+    """路由结果：agent 是实际选用对象，level/skill_id/diagnostics 用于解释与追踪。"""
     agent: Any
     level: str = "fallback"
     skill_id: str = ""
@@ -24,13 +26,12 @@ class Selection:
 
 
 def select_agent(turn, catalog, generic) -> Selection:
-    """仅回答模式用通用助手；其他情况按路由和会话状态选择技能。"""
-    if turn.reply_only:
-        return Selection(generic)
+    """根据本次消息和会话当前技能选择助手。"""
     available = {entry.id for entry in catalog}
     diagnostics: dict = {}
     started = time.perf_counter()
     with obs.span("route", "意图识别") as step:
+        # L1 先按规则匹配；没有明确命中才走 L2 意图模型，避免每句话都发一次识别请求。
         route = l1_route(turn.message, available)
         if route is None:
             route = l2_route(turn.message, catalog, diagnostics, turn.user_id)
@@ -38,9 +39,8 @@ def select_agent(turn, catalog, generic) -> Selection:
                     skill=route.skill_id if route else "", reason=diagnostics.get("reason", ""))
     duration = round((time.perf_counter() - started) * 1000, 1)
 
-    # 附件恢复沿用提交时冻结的技能；普通续聊读取会话里的活跃技能。
-    active = (turn.attachment.get("active_skill", "") if turn.attachment else
-              turn.thread.meta.get("active_skill", ""))
+    # “当前技能”帮助追问保持连贯；保护规则不允许的跳转，继续沿用有效的原技能。
+    active = turn.active_skill
     skill_id = route.skill_id if route else ""
     if not may_switch_to(turn.message, skill_id, active):
         skill_id = active if active in available else ""
@@ -50,6 +50,7 @@ def select_agent(turn, catalog, generic) -> Selection:
         agent = generic
     else:
         agent = get_skill(active) if active in available else generic
+    # agent 是保护/回退后的实际选择；skill_id 保留原路由判断，二者可能不同。
     return Selection(agent, route.level if route else "fallback",
                      route.skill_id if route else "", duration, diagnostics)
 

@@ -68,13 +68,6 @@ services:
       # （compose down / 重新 build）档案就全没了 —— 而且是静默的：容器照常起来，
       # 只是里面是空的。这一行是这个文件里最重要的一行。
       - /srv/station/data:/app/data
-      # ★ 附件解析（unstructured）需要的 NLTK 分词资源（punkt_tab / averaged_perceptron_tagger_eng，
-      #   约 22MB）。它不走 pip 也不进镜像 —— 构建机（这台阿里云）连不上 NLTK 的默认源
-      #   GitHub raw，Dockerfile 里的下载会跳过，于是**靠这一行从宿主机挂进来**；容器里的
-      #   NLTK_DATA=/opt/station-nltk 正好指向它。
-      #   ★ 和 data/ 那行一样是必需的：目录空着不报错、容器照起，只会在**上传附件解析时**才失败。
-      #   更新资源：替换 /srv/station/nltk 里的文件后 `docker compose restart station` 即可，不用重建镜像。
-      - /srv/station/nltk:/opt/station-nltk:ro
       # 证书只读挂进去（容器没有理由写它）
       - /srv/station/certs:/certs:ro
 

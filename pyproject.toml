@@ -47,17 +47,6 @@ dependencies = [
 [project.optional-dependencies]
 docx = ["python-docx>=1.1"]        # weekly-report 的 export_docx
 dev = ["pytest>=8"] # 跑离线测试（httpx 已是主依赖）
-documents = [
-    # 文档处理依赖固定版本：联网构建一次后，Loader/cleaners/splitter 离线调用。
-    "langchain-community==0.4.1",
-    "langchain-text-splitters==1.1.1",
-    "langchain-unstructured==1.0.1",
-    "unstructured[xlsx]==0.20.6",
-    "docx2txt==0.9",
-    "psutil>=7,<8",
-    "tzdata>=2025",
-]
-
 [project.scripts]
 station-web = "station.app.server:main"   # 一键起站：pip install -e .[dev]; station-web
 archive-cli = "station.skills.cli:archive_main"  # 保留命令名，具体实现随技能加载
@@ -69,7 +58,7 @@ where = ["src", "skills/archive/code"]
 include = ["station*", "archive_core*"]
 
 [tool.setuptools.package-data]
-"station" = ["app/static/*", "documents/schemas/*.json"]
+"station" = ["app/static/*"]
 
 # wheel 中代码按 Python 包安装，技能入口与可编辑资源按原目录层级一起携带。
 # 源码、Docker 仍使用仓库 skills；独立安装使用 sys.prefix/share/station/skills。

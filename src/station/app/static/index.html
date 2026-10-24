@@ -222,56 +222,6 @@
                    background:var(--panel2);font-size:12px;color:var(--fg)}
   .prog .jfail .row{margin:10px 0 0}
   #composer{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
-  #attachmentDrafts{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px;max-height:120px;overflow:auto}
-  #attachmentDrafts:not(:empty){padding-top:8px;padding-bottom:8px}
-  .attachment-draft{border:1px solid var(--line);border-radius:6px;padding:3px 7px;color:var(--dim)}
-  .document-card .document-rows{white-space:normal;font-size:13px}
-  .document-tree{margin:0 0 16px;border:1px solid var(--line);border-radius:12px;
-                 background:var(--panel2);overflow:hidden;font-size:13px}
-  .document-tree summary{cursor:pointer;list-style:none}
-  .document-tree summary::-webkit-details-marker{display:none}
-  .document-tree summary:focus-visible{outline:2px solid var(--acc);outline-offset:-3px;border-radius:7px}
-  .dt-root-head{display:flex;align-items:center;gap:10px;padding:13px 12px}
-  .dt-root-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;
-                 background:rgba(76,141,255,.12);color:var(--acc);border-radius:9px}
-  .dt-root-icon svg{width:19px;height:19px}
-  .dt-root-title{flex:1;min-width:0}.dt-root-title b{display:block;font-size:14px}
-  .dt-root-title small{display:block;font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
-  .dt-count{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
-  .dt-chevron{flex:none;width:14px;height:14px;color:var(--dim);transition:transform .15s}
-  details[open]>.dt-root-head>.dt-chevron,details[open]>.dt-date-head>.dt-chevron,
-  details[open]>.dt-document-head>.dt-chevron{transform:rotate(90deg)}
-  .dt-body{border-top:1px solid var(--line);padding:2px 9px 10px;background:var(--panel)}
-  .dt-date{margin-top:5px}
-  .dt-date-head{display:flex;align-items:center;gap:7px;padding:9px 4px;color:var(--dim);font-size:12px}
-  .dt-date-head time{flex:1;font-weight:600;letter-spacing:.3px}
-  .dt-date-docs{display:flex;flex-direction:column;gap:6px;border-left:1px solid var(--line);padding-left:9px;margin-left:10px}
-  .dt-document{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:hidden}
-  .dt-document-head{display:flex;gap:9px;align-items:center;padding:10px}
-  .dt-document-head:hover{background:rgba(76,141,255,.05)}
-  .dt-document[open]{border-color:#3b4e6d}
-  .dt-type{display:grid;place-items:center;flex:none;width:35px;height:39px;border-radius:7px;
-            border:1px solid rgba(76,141,255,.18);background:rgba(76,141,255,.08);color:#8ab4ff;
-            font-size:9px;font-weight:700;letter-spacing:.3px}
-  .dt-type[data-type="pdf"]{color:#e5a19e;border-color:rgba(229,161,158,.18);background:rgba(229,161,158,.07)}
-  .dt-type[data-type="xlsx"],.dt-type[data-type="csv"]{color:#8bc7ab;border-color:rgba(139,199,171,.18);background:rgba(139,199,171,.07)}
-  .dt-document-info{flex:1;min-width:0}
-  .dt-document-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;
-                    overflow-wrap:anywhere;line-height:1.5;font-size:12px;font-weight:500;color:var(--fg)}
-  .dt-document-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;color:var(--dim);font-size:10px}
-  .dt-status{display:inline-flex;align-items:center;gap:5px}
-  .dt-status::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
-  .dt-status[data-tone="ok"]{color:#8bc7ab}.dt-status[data-tone="warn"]{color:var(--warn)}
-  .dt-status[data-tone="error"]{color:#e99a9a}.dt-status[data-tone="busy"]{color:#8ab4ff}
-  .document-files{padding:11px 10px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);overflow-wrap:anywhere}
-  .document-files details{margin:8px 0;padding-left:9px;border-left:1px solid var(--line)}
-  .document-files summary{padding:4px 0;color:var(--fg)}
-  .document-files summary::before{content:"›";display:inline-block;width:12px;color:var(--dim)}
-  .document-files details[open]>summary::before{content:"⌄"}
-  .document-files a{display:block;color:var(--acc);padding:5px 0}
-  .document-files a:hover{text-decoration:underline}
-  .document-files .mini{font-size:11px}.dt-more{display:block;width:100%;margin-top:10px;padding:8px}
-  @media(prefers-reduced-motion:reduce){.dt-chevron{transition:none}}
   #composer input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 12px}
   .row{display:flex;align-items:center;gap:8px;margin:8px 0}
   .hint{color:var(--dim);font-size:12px}
@@ -587,9 +537,7 @@
     </div>
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       <div id="msgs"></div>
-      <div id="attachmentDrafts"></div>
-      <div id="composer"><button class="ghost" id="btnUploadDocument" title="上传文档作为对话附件">上传文件</button>
-        <input type="file" id="documentPicker" multiple accept=".txt,.md,.csv,.tsv,.pdf,.docx,.xlsx,.html,.htm" hidden>
+      <div id="composer">
         <input id="inp" placeholder="直接说要做什么…">
         <button id="btnSend">发送</button></div>
     </div>
@@ -677,7 +625,7 @@
 
 <script>
 const $=s=>document.querySelector(s);
-let threadId=null, me=null;
+let threadId=null, me=null, currentApprovalId="";
 // 当前正在看的会话的代次。切会话不等于取消旧的 HTTP 流，但旧流从这一刻起绝不能再
 // 写进新的 #msgs；用递增代次而不是只比 threadId，能区分“切走又切回同一会话”。
 let viewEpoch=0;
@@ -764,7 +712,7 @@ function markHistory(){
 function newChat(){
   viewEpoch++;
   threadId=null;
-  documentDrafts=[]; documentRetry=null; paintDocumentDrafts();
+  currentApprovalId="";
   resetViewEphemera();            // 上一条还挂着等待态/待绘制文字，别让它漂到新会话里
   $("#msgs").innerHTML="";
   localStorage.removeItem("stLast");
@@ -793,8 +741,8 @@ async function openThread(id, sd){
   const data=sd||await (await fetch(`/api/sessions/${id}`)).json();
   if(epoch!==viewEpoch || !data||data.msgs===undefined) return;
   resetViewEphemera();            // 切会话时同理：等待态/流式气泡都属于发起它的那一轮
-  documentDrafts=[]; documentRetry=null; paintDocumentDrafts();
   threadId=id; $("#msgs").innerHTML="";
+  currentApprovalId="";
   (data.msgs||[]).forEach(m=>{
     if(m.role==="render"&&m.card){ renderCard(m.card); return; }
     if(m.tool_call){ addMsg("tool",toolChip(m.tool_call)); return; }   // 工具调用行
@@ -810,15 +758,12 @@ async function openThread(id, sd){
   // "agent 在等允许、屏幕上什么都没有"，只能盲敲"允许"。
   if(data.pending&&data.pending.tool){
     showAppr(data.pending.tool,data.pending.label,data.pending.arguments,
-             data.pending.preview);
+             data.pending.preview,data.pending.id,data.pending.state||"waiting");
   }
   localStorage.setItem("stLast",JSON.stringify({thread:id}));
   markHistory();
   watchThreadJob(data);       // 会话若还有识别任务在跑，接上进度
   setSend(true);              // 不让旧会话的慢流锁住当前会话的输入框
-  (data.attachment_turns||[]).forEach(t=>{
-    if(!document.querySelector(`.document-card[data-turn="${t.id}"]`)) showDocumentCard({turn_id:t.id,thread_id:id});
-  });
   $("#inp").focus();
 }
 $("#histList").onclick=e=>{
@@ -1025,20 +970,19 @@ async function send(text,opts={}){
   // 这一次请求只归属于发起时正在看的那张会话。SSE 不支持从浏览器端安全地
   // “取消且让服务端停算”，因此切走时让它继续落库，但绝不允许污染新会话的 DOM。
   const epoch=viewEpoch, requestedThreadId=threadId;
-  documentSendEpochs.set(epoch,(documentSendEpochs.get(epoch)||0)+1);
+  // 按钮使用它自己绑定的编号；文字回复使用当前看到的待批准编号。
+  const approvalId=opts.approvalId??currentApprovalId;
   let streamThreadId=requestedThreadId;
   const ownsView=()=>viewEpoch===epoch && threadId===streamThreadId;
   let traceUser=null;
-  if(!opts.fromApprove&&!opts.resumeTurn&&!opts.hideUser){ traceUser=addMsg("u",esc(text)); }
+  if(!opts.fromApprove){ traceUser=addMsg("u",esc(text)); }
   else traceUser=[...document.querySelectorAll('#msgs .m.u')].at(-1)||null;
   breakBubble(); setSend(false);
   // 先"正在理解"——路由（判词）这一段最长，先给个交代，别让界面一片死寂
   showPending("正在理解你的意思…");
   try{
     const resp=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:text,thread_id:requestedThreadId,
-        attachment_ids:opts.attachmentIds||[],client_turn_id:opts.clientTurn||"",
-        resume_turn_id:opts.resumeTurn||"",retry_agent:!!opts.retryAgent,reply_only:!!opts.replyOnly})});
+      body:JSON.stringify({message:text,thread_id:requestedThreadId,...(approvalId?{approval_id:approvalId}:{})})});
     await readSSE(resp,ev=>{
       if(ev.type==="meta"){
         streamThreadId=ev.thread_id||streamThreadId;
@@ -1054,7 +998,11 @@ async function send(text,opts={}){
       else if(ev.type==="trace"){
         attachTraceButton(ev.trace_id,traceUser);
       }
-      else if(ev.type==="stage"){ setPending(ev.text||"正在思考…"); }   // 路由结束、开始生成
+      else if(ev.type==="stage"){
+        currentApprovalId="";
+        document.querySelectorAll('.apcard button').forEach(b=>b.disabled=true);
+        setPending(ev.text||"正在思考…");
+      }   // 原操作已处理，后续新批准必须绑定新的编号。
       // 模型连不上、正在退避重连（服务端 core/model.py 的 RETRY_WAITS）：等待态里报倒计时
       else if(ev.type==="retry"){ setPendingRetry(ev); }
       // 正文流：用 rAF 按帧合并重绘（每个字都重排太浪费），并懒创建气泡
@@ -1066,19 +1014,14 @@ async function send(text,opts={}){
       }
       else if(ev.type==="tool"){ clearPending(); addMsg("tool",toolChip(ev)); breakBubble(); }
       else if(ev.type==="render"&&ev.card){ clearPending(); renderCard(ev.card); breakBubble(); }   // 渲染即工具：卡片长在对话流里
-      else if(ev.type==="attachment_wait"){
-        documentDrafts=[];documentRetry=null;paintDocumentDrafts();
-        watchDocumentTurn(ev.turn_id,streamThreadId);
-      }
       else if(ev.type==="approval_request"){
-        clearPending(); showAppr(ev.tool,ev.label,ev.arguments,ev.preview); breakBubble();
+        clearPending(); showAppr(ev.tool,ev.label,ev.arguments,ev.preview,ev.approval_id); breakBubble();
       }
       else if(ev.type==="error"){ clearPending(); addMsg("err",esc(ev.text||"出错")); breakBubble(); }
       else if(ev.type==="done"){ refreshHistory(); syncThreadJob(streamThreadId); }
     });
   }catch(e){ if(ownsView()){ clearPending(); addMsg("err",esc("请求失败："+e)); } }
   finally{
-    documentSendEpochs.set(epoch,Math.max(0,(documentSendEpochs.get(epoch)||1)-1));
     if(ownsView()){
       clearPending();                                                    // 兜底：任何出口都别留下等待态
       if(raf){ cancelAnimationFrame(raf); raf=0; } paintDelta();         // 把最后一帧画完
@@ -1087,218 +1030,12 @@ async function send(text,opts={}){
     refreshProducts();
   }
 }
-// ── 宿主文档附件：上传只登记草稿，发送后后台处理；轮询始终绑定原会话视图。 ──
-let documentDrafts=[], documentRetry=null;
-const documentSendEpochs=new Map(), documentWatches=new Map();
-function paintDocumentDrafts(){
-  $("#attachmentDrafts").innerHTML=documentDrafts.map((d,i)=>
-    `<span class="attachment-draft">${esc(d.name)} · ${esc(d.error||d.status||"已上传")}
-      <button class="ghost mini" onclick="removeDocumentDraft(${i})" aria-label="移除附件">×</button></span>`).join("");
-}
-async function removeDocumentDraft(i){
-  const [draft]=documentDrafts.splice(i,1);documentRetry=null;paintDocumentDrafts();
-  if(draft?.id)await fetch(`/api/documents/${draft.id}`,{method:"DELETE"}).catch(()=>{});
-}
-$("#btnUploadDocument").onclick=()=>$("#documentPicker").click();
-$("#documentPicker").onchange=async()=>{
-  const files=[...$("#documentPicker").files], epoch=viewEpoch;
-  $("#documentPicker").value="";
-  if(!files.length)return;
-  const placeholders=files.map(f=>({name:f.name,status:"上传中"}));
-  documentDrafts.push(...placeholders);paintDocumentDrafts();
-  const form=new FormData();files.forEach(f=>form.append("files",f));
-  form.append("client_upload_id",crypto.randomUUID());
-  try{
-    const response=await fetch("/api/documents/upload",{method:"POST",body:form});
-    const data=await response.json();
-    if(viewEpoch!==epoch)return;
-    documentDrafts=documentDrafts.filter(d=>!placeholders.includes(d));
-    if(!response.ok)throw new Error(data.detail||"上传失败");
-    documentDrafts.push(...(data.documents||[]).map(d=>({...d,status:"已上传"})));
-    for(const e of data.errors||[])documentDrafts.push({name:e.name,error:e.message});
-  }catch(e){
-    if(viewEpoch===epoch){
-      documentDrafts=documentDrafts.filter(d=>!placeholders.includes(d));
-      files.forEach(f=>documentDrafts.push({name:f.name,error:String(e.message||e)}));
-    }
-  }finally{if(viewEpoch===epoch)paintDocumentDrafts();}
-};
-function sendWithDocuments(){
-  if(documentDrafts.some(d=>d.status==="上传中")){addMsg("err","请等附件上传完成再发送。");return;}
-  const ids=documentDrafts.filter(d=>d.id).map(d=>d.id);
-  let text=$("#inp").value.trim();
-  if(!text&&!ids.length)return;
-  if(!text)text="请阅读附件，说明内容和处理情况";
-  const same=documentRetry&&documentRetry.text===text&&JSON.stringify(documentRetry.ids)===JSON.stringify(ids);
-  const clientTurn=same?documentRetry.key:crypto.randomUUID();
-  documentRetry=ids.length?{text,ids,key:clientTurn}:null;
+// 输入框只发送普通文本，人工批准按钮复用 send。
+function sendCurrentInput(){
+  const text=$("#inp").value.trim();
+  if(!text)return;
   $("#inp").value="";
-  send(text,{attachmentIds:ids,clientTurn,hideUser:!!same});
-}
-function showDocumentCard(card){
-  const existing=document.querySelector(`.document-card[data-turn="${card.turn_id}"]`);
-  if(existing)return existing;
-  const node=document.createElement("div");node.className="card-m document-card";
-  node.dataset.turn=card.turn_id;
-  node.innerHTML='<div class="caph">附件处理</div><div class="document-rows">正在读取状态…</div>';
-  $("#msgs").appendChild(node);
-  watchDocumentTurn(card.turn_id,card.thread_id);
-  return node;
-}
-function documentState(state){return ({uploaded:"已上传",parsing:"解析中",parsed_ready:"正文可用，正在切块",
-  partial:"正文已保留，切块未完成",
-  completed:"处理完成",failed:"处理失败",waiting_parse:"正在处理",ready:"正文已准备好",running_agent:"正在回答",
-  done:"已完成",cancelled:"已取消",interrupted:"已中断"})[state]||state;}
-function documentQuality(state){return ({accepted:"检查通过",needs_review:"需要核对",partial:"部分内容缺失",unusable:"无可用正文"})[state]||state;}
-async function watchDocumentTurn(turnId,targetThread){
-  const epoch=viewEpoch, previous=documentWatches.get(turnId);
-  if(previous&&previous.epoch===epoch)return;
-  const token={epoch};documentWatches.set(turnId,token);
-  const owns=()=>viewEpoch===epoch&&(!targetThread||threadId===targetThread)&&documentWatches.get(turnId)===token;
-  while(owns()){
-    try{
-      const response=await fetch(`/api/documents/turns/${turnId}`);
-      if(!owns())break;
-      if(!response.ok)throw new Error("暂时无法读取附件状态");
-      const data=await response.json();if(!owns())break;
-      const node=document.querySelector(`.document-card[data-turn="${turnId}"] .document-rows`);
-      if(node){
-        const rows=(data.documents||[]).map(d=>{
-          const last=(d.runs||[]).find(r=>r.id===d.latest_run)||{};
-          return `<div><b>${esc(d.name)}</b> · ${esc(documentState(d.status))}
-            ${last.blocks!==undefined?` · ${last.blocks} 个内容块 / ${last.chunks||0} 个片段`:""}
-            ${last.quality&&last.quality!=="accepted"?` · ${esc(documentQuality(last.quality))}`:""}
-            ${d.error?`<div class="hint">${esc(d.error)}</div>`:""}</div>`;
-        }).join("");
-        const retry=["failed","interrupted"].includes(data.state)&&data.thread_id?
-          `<button class="ghost mini" onclick="send('',{resumeTurn:'${turnId}',retryAgent:true,replyOnly:true})">重新回答（复用解析）</button>`:"";
-        const cancel=data.state==="waiting_parse"?
-          `<button class="ghost mini" onclick="cancelDocumentTurn('${turnId}')">取消处理</button>`:"";
-        node.innerHTML=rows+`<div class="hint">${esc(data.job?.message||documentState(data.state))}</div>`+
-          `<button class="ghost mini" onclick="toggleProducts(true)">查看产物</button> ${cancel} ${retry}`;
-      }
-      // 初始 SSE 完成后才恢复，防止两个流同时使用同一组气泡/等待态变量。
-      if(data.state==="ready"&&data.thread_id&&!data.manual_reply&&!data.blocked_by_approval&&!(documentSendEpochs.get(epoch)||0)){
-        token.resumed=true;
-        await send("",{resumeTurn:turnId});
-        if(!owns())break;
-      }
-      if(["failed","interrupted","cancelled"].includes(data.state)||
-         (data.job&&["done","failed"].includes(data.job.status)&&["done","ready"].includes(data.state))){
-        refreshProducts();break;
-      }
-    }catch(e){
-      const node=document.querySelector(`.document-card[data-turn="${turnId}"] .document-rows`);
-      if(owns()&&node)node.textContent=String(e.message||e)+"，稍后重试。";
-    }
-    await new Promise(resolve=>setTimeout(resolve,800));
-  }
-  if(documentWatches.get(turnId)===token)documentWatches.delete(turnId);
-}
-async function cancelDocumentTurn(id){
-  const r=await fetch(`/api/documents/turns/${id}/cancel`,{method:"POST"});
-  if(!r.ok){const d=await r.json();addMsg("err",esc(d.detail||"取消失败"));}
-}
-let documentProductRows=[], nextDocumentOffset=null;
-const DOCUMENT_TREE_CHEVRON='<svg class="dt-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 4 4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-function documentProductSize(bytes){
-  if(bytes<1024)return `${bytes} B`;
-  if(bytes<1024*1024)return `${(bytes/1024).toFixed(1)} KB`;
-  return `${(bytes/1024/1024).toFixed(1)} MB`;
-}
-function documentProductRow(d){
-  const ext=String(d.suffix||fileExt(d.name)||'FILE').replace(/^\./,'').toLowerCase();
-  const run=(d.runs||[]).find(r=>r.id===d.latest_run)||{};
-  const tone=d.status==='completed'?'ok':d.status==='failed'?'error':
-    ['partial','cancelled','interrupted'].includes(d.status)?'warn':'busy';
-  const meta=[Number.isFinite(d.size)?documentProductSize(d.size):'',
-    Number.isFinite(run.chunks)?`${run.chunks} 个片段`:''].filter(Boolean).map(esc).join(' · ');
-  return `<details class="dt-document" data-tree-key="doc:${esc(d.id)}" data-document="${esc(d.id)}" ontoggle="loadDocumentProduct(this)">
-    <summary class="dt-document-head" title="${esc(d.name)}">
-      <span class="dt-type" data-type="${esc(ext)}" aria-hidden="true">${esc(ext.slice(0,5).toUpperCase())}</span>
-      <span class="dt-document-info"><span class="dt-document-name">${esc(d.name)}</span>
-        <span class="dt-document-meta"><span class="dt-status" data-tone="${tone}">${esc(documentState(d.status))}</span>${meta?`<span>${meta}</span>`:''}</span>
-      </span>${DOCUMENT_TREE_CHEVRON}
-    </summary><div class="document-files">正在读取…</div>
-  </details>`;
-}
-function renderDocumentProducts(rows,offset=null,append=false){
-  documentProductRows=append?[...new Map([...documentProductRows,...rows].map(d=>[d.id,d])).values()]:rows;
-  nextDocumentOffset=offset;
-  const previous=document.querySelector('#prodList .document-tree');
-  const opened=new Map([...(previous?.querySelectorAll('[data-tree-key]')||[])].map(n=>[n.dataset.treeKey,n.open]));
-  if(previous)opened.set('root',previous.open);
-  previous?.remove();
-  if(!documentProductRows.length&&offset===null)return;
-  $("#prodList .empty")?.remove();
-  const dates={};documentProductRows.forEach(d=>(dates[d.date]??=[]).push(d));
-  const tree=document.createElement("details");tree.className="document-tree";tree.open=true;
-  tree.innerHTML=`<summary class="dt-root-head"><span class="dt-root-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3V7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.6"/></svg></span>
-    <span class="dt-root-title"><b>文档解析</b><small>orignChunk</small></span><span class="dt-count">${offset!==null?'已加载 ':''}${documentProductRows.length} 份</span>${DOCUMENT_TREE_CHEVRON}</summary>
-    <div class="dt-body">${Object.entries(dates).sort(([a],[b])=>b.localeCompare(a)).map(([date,docs])=>
-    `<details class="dt-date" data-tree-key="date:${esc(date)}" open><summary class="dt-date-head">${DOCUMENT_TREE_CHEVRON}<time>${esc(date)}</time><span class="dt-count">${docs.length} 份</span></summary>
-      <div class="dt-date-docs">${docs.map(documentProductRow).join('')}</div></details>`).join('')}
-    ${offset!==null?'<button class="ghost mini dt-more" onclick="moreDocumentProducts(this)">加载更多文档</button>':''}</div>`;
-  $("#prodList").prepend(tree);
-  if(opened.has('root'))tree.open=opened.get('root');
-  tree.querySelectorAll('[data-tree-key]').forEach(n=>{if(opened.has(n.dataset.treeKey))n.open=opened.get(n.dataset.treeKey);});
-}
-async function moreDocumentProducts(button){
-  button.disabled=true;
-  try{
-    const r=await fetch('/api/files?document_offset='+nextDocumentOffset),d=await r.json();
-    if(!r.ok)throw new Error(d.detail||'读取失败');
-    renderDocumentProducts(d.documents||[],d.next_document_offset??null,true);
-  }catch(e){button.disabled=false;addMsg('err',esc(String(e.message||e)));}
-}
-async function loadDocumentProduct(node){
-  if(!node.open||node.dataset.loaded)return;
-  node.dataset.loaded="1";
-  const id=node.dataset.document;
-  try{
-    const response=await fetch(`/api/documents/${id}`), data=await response.json();
-    if(!response.ok)throw new Error(data.detail||"读取失败");
-    const files=data.files||[], runs=data.runs||[];
-    node.querySelector(".document-files").innerHTML=
-      files.filter(f=>!f.run_id).map(f=>`<a href="${esc(f.url)}?dl=1">原件：${esc(f.name)}</a>`).join("")+
-      runs.filter(r=>r.manifest).map((r,i)=>`<details ${r.id===data.latest_run?"open":""}>
-        <summary>版本 ${i+1} · ${esc(documentState(r.state))} · ${esc(documentQuality(r.quality||""))}</summary>
-        <a href="/api/documents/${id}/archive?run_id=${r.id}">下载完整结果包</a>
-        ${documentFileTree(files.filter(f=>f.run_id===r.id))}</details>`).join("")+
-      `<button class="ghost mini" onclick="reprocessDocument('${id}',this)">重新解析与切块</button>`;
-  }catch(e){node.dataset.loaded="";node.querySelector(".document-files").textContent=String(e.message||e);}
-}
-function documentFileTree(files){
-  const root={};
-  files.forEach(f=>{const parts=(f.path||f.name).split("/");let node=root;
-    parts.slice(0,-1).forEach(p=>{node=node[p]??={};});node[parts.at(-1)]=f;});
-  const render=node=>Object.entries(node).sort(([a],[b])=>a.localeCompare(b,"zh",{numeric:true})).map(([name,value])=>
-    value.url?`<div><a style="display:inline-block" href="${esc(value.url)}?dl=1">${esc(name)}</a>
-      <button class="ghost mini" onclick="previewDocumentFile('${value.url}',this)">预览</button></div>`:
-      `<details open><summary>${esc(name)}</summary>${render(value)}</details>`).join("");
-  return render(root);
-}
-async function previewDocumentFile(url,button){
-  const container=button.parentElement, old=container.querySelector("pre");
-  if(old){old.remove();return;}
-  button.disabled=true;
-  try{
-    const response=await fetch(url+"?preview=1"), data=await response.json();
-    if(!response.ok)throw new Error(data.detail||"预览失败");
-    const node=document.createElement("pre");node.style="max-height:260px;overflow:auto;white-space:pre-wrap;font-size:11px";
-    node.textContent=data.text+(data.truncated?"\n（预览仅显示前 64000 个字符，下载可取得完整内容）":"");
-    container.appendChild(node);
-  }catch(e){addMsg("err",esc(String(e.message||e)));}
-  finally{button.disabled=false;}
-}
-async function reprocessDocument(id,button){
-  button.disabled=true;
-  try{
-    const response=await fetch(`/api/documents/${id}/process`,{method:"POST"});
-    const data=await response.json();if(!response.ok)throw new Error(data.detail||"重试失败");
-    showDocumentCard({turn_id:data.id,thread_id:threadId});
-  }catch(e){addMsg("err",esc(String(e.message||e)));}
-  finally{button.disabled=false;refreshProducts();}
+  send(text);
 }
 
 // ── 批准卡 ───────────────────────────────────────────────────────────
@@ -1307,7 +1044,7 @@ async function reprocessDocument(id,button){
 //   原始工具名 + 完整参数收进 title（鼠标停上去才看），参数另用暗色小字列 k=v。
 // ★ **实时与"刷新后重画"走同一个函数**：以前刷新之后这张卡根本不会重画，用户会卡在
 //   "agent 在等允许、屏幕上却什么都没有"——只能盲敲"允许"。
-function apprCard(tool,label,args,preview){
+function apprCard(tool,label,args,preview,approvalId,state){
   const leaf=String(tool||"").split(".").pop();
   const name=String(label||"").trim()||leaf;          // 没写 label 就退回叶子名（不会空白）
   const a=args||{}, keys=Object.keys(a);
@@ -1316,18 +1053,23 @@ function apprCard(tool,label,args,preview){
   // ★ preview 是**工具自己算的**"这一步到底要做什么"（`Tool.preview`）——
   //   光有 label（"把口径写进去"）用户不知道在批准什么，尤其是"要写的内容是现算的"那种。
   const pv=String(preview||"").trim();
+  const ready=state==="waiting"&&/^[0-9a-f]{32}$/.test(approvalId||"");
+  const safeId=ready?approvalId:"";
   return `<div class="caph">⚠️ <b>需要你确认</b><span>确认后才会执行</span></div>
     <div class="apw" title="${esc(detail)}"><span class="ti">⚙</span><span>${esc(name)}</span>${
       brief?`<span class="ta">${esc(brief)}</span>`:""}</div>
     ${pv?`<div class="apv"></div>`:""}
     <div class="row" style="margin:8px 0 0">
-      <button class="mini" onclick="approve(true)">允许</button>
-      <button class="ghost mini" onclick="approve(false)">拒绝</button>
-    </div>`;
+      <button class="mini" ${ready?'':'disabled'} onclick="approve(true,'${safeId}')">允许</button>
+      <button class="ghost mini" ${ready?'':'disabled'} onclick="approve(false,'${safeId}')">拒绝</button>
+    </div>${ready?'':'<div class="hint">该操作已被领取处理；未收到结果时请先核对执行详情，不要重复确认。</div>'}`;
 }
-function showAppr(tool,label,args,preview){
+function showAppr(tool,label,args,preview,approvalId,state="waiting"){
+  document.querySelectorAll('.apcard button').forEach(b=>b.disabled=true);
+  currentApprovalId=state==="waiting"?(approvalId||""):"";
   const d=document.createElement("div"); d.className="card-m apcard";
-  d.innerHTML=apprCard(tool,label,args,preview);
+  d.dataset.approvalId=approvalId||"";
+  d.innerHTML=apprCard(tool,label,args,preview,approvalId,state);
   const v=d.querySelector(".apv");
   // ★ 预览走 Markdown 渲染（`**十**` 要显示成加粗，不是原样文字），但**必须 safe**：
   //   预览里嵌着档案 OCR 出来的材料名，那是外部数据 —— 当 HTML 跑就等于给"一份做过
@@ -1337,8 +1079,14 @@ function showAppr(tool,label,args,preview){
   $("#msgs").scrollTop=$("#msgs").scrollHeight;
   return d;
 }
-function approve(allow){ send(allow?"允许":"拒绝",{fromApprove:true}); }
-function setSend(on){ $("#btnSend").disabled=!on; $("#inp").disabled=!on; $("#btnUploadDocument").disabled=!on; }
+function approve(allow,approvalId){
+  if(!/^[0-9a-f]{32}$/.test(approvalId||"")){addMsg("err","确认已失效，请刷新会话。");return;}
+  document.querySelectorAll('.apcard').forEach(card=>{
+    if(card.dataset.approvalId===approvalId)card.querySelectorAll('button').forEach(b=>b.disabled=true);
+  });
+  send(allow?"允许":"拒绝",{fromApprove:true,approvalId});
+}
+function setSend(on){ $("#btnSend").disabled=!on; $("#inp").disabled=!on; }
 async function syncThreadJob(tid=threadId){
   if(!tid || threadId!==tid) return;
   try{
@@ -1365,7 +1113,6 @@ function fileRow(f){ const href=f.url||("/api/files/"+f.id);
     <span class="act">打开</span></a>`; }
 
 function renderCard(card){
-  if(card.type==="attachments") return showDocumentCard(card);
   const fn=RENDERERS[card.type];
   if(!fn){ addMsg("tool","（未知卡片类型："+esc(card.type)+"）"); return; }
   const d=document.createElement("div"); d.className="card-m";
@@ -2175,37 +1922,23 @@ async function watchThreadJob(sd, showEnded){
 let taskEpoch=0,taskTimer=null,taskCategory='all',taskFocusId='',taskCursor='',taskRows=[],taskFocus=null;
 const taskActionKeys=new Map(),taskBusy=new Set();
 const TASK_STATES={queued:'排队中',running:'处理中',cancelling:'正在停止',done:'已完成',failed:'处理失败',
-  partial:'部分完成',interrupted:'已中断',unknown:'状态待核验',cancelled:'已取消',waiting_reply:'等待继续回答'};
-// 后端仍分别记录解析与回答，卡片只呈现用户当前关心的阶段，不改变任务状态或允许动作。
+  partial:'部分完成',interrupted:'已中断',unknown:'状态待核验',cancelled:'已取消'};
+// 卡片展示后台任务阶段；具体操作由服务端声明。
 function taskPresentation(t){
-  const state=t.processing_state,reply=t.reply_state,doc=t.type==='station-documents';
+  const state=t.processing_state;
   const kind={video:['视频','视频生成中','视频已生成'],archive:['档案','正在识别档案','档案识别完成'],
-    'interview-coach':['音频','正在转写音频','转写已完成'],'station-documents':['文档','正在解析文档','文档已解析']}[t.type]||['任务','正在处理','已完成'];
+    'interview-coach':['音频','正在转写音频','转写已完成']}[t.type]||['任务','正在处理','已完成'];
   let label=TASK_STATES[state]||'状态待核验',summary='',tone=state;
-  const busy=['queued','running','cancelling'].includes(state)||(doc&&reply==='running_agent');
-  if(state==='queued'){label=doc?'等待解析文档':kind[0]+'任务排队中';summary='任务已提交，等待开始处理。';}
-  else if(state==='running'){label=kind[1];summary=doc?'正在提取正文并保存解析结果。':'任务正在执行，结果会保存在这里。';}
+  const busy=['queued','running','cancelling'].includes(state);
+  if(state==='queued'){label=kind[0]+'任务排队中';summary='任务已提交，等待开始处理。';}
+  else if(state==='running'){label=kind[1];summary='任务正在执行，结果会保存在这里。';}
   else if(state==='cancelling'){label='正在停止';summary='停止请求已提交，已有结果会保留。';}
-  else if(state==='failed'){label=({'station-documents':'文档解析失败',video:'视频生成失败',archive:'档案识别失败','interview-coach':'音频转写失败'})[t.type]||'任务失败';summary=doc?'请查看处理记录，可在更多操作中重新解析。':'请查看处理记录或返回原会话核对。';}
-  else if(state==='partial'){label='部分解析完成';summary='部分文档未完成解析，可用结果已保留，请核对处理报告。';}
+  else if(state==='failed'){label=({video:'视频生成失败',archive:'档案识别失败','interview-coach':'音频转写失败'})[t.type]||'任务失败';summary='请查看处理记录或返回原会话核对。';}
+  else if(state==='partial'){label='部分完成';summary='已有结果保留，请查看处理记录。';}
   else if(state==='interrupted'){label=kind[0]+'任务已中断';summary='任务执行已中断，已有结果会保留。';}
   else if(state==='unknown'){label='执行状态待核验';summary='暂时无法确认任务是否仍在运行。已有结果保留，可返回原会话核对。';}
   else if(state==='cancelled'){label='已停止处理';summary='已停止本地处理或等待，已有结果会保留。';}
-  else if(state==='done'){
-    label=kind[2];summary=t.type==='archive'?'识别结果已保存，可返回原会话核对并继续出件。':'结果已保存，可打开下方文件查看。';
-    if(doc){
-      if(reply==='running_agent'){label='正在生成回答';summary='文档已解析，正在根据你的问题生成回答。';tone='running';}
-      else if(reply==='failed'||reply==='interrupted'){
-        label='回答未完成';tone='waiting_reply';summary=t.body_available?'文档解析结果已保存，重新回答会复用这些内容，无需重新解析。':'处理报告已保存，暂无可用正文，可重新生成处理说明。';
-      }else if(reply==='ready'){
-        label='文档已解析';tone='waiting_reply';summary=t.body_available?'解析结果已保存，可生成回答，也可先查看解析结果。':'处理报告已保存，暂无可用正文，可生成处理说明。';
-      }else if(reply==='done'){label='已完成';summary='文档解析和回答均已完成，可查看回答及解析结果。';}
-      else if(reply==='cancelled'){label='回答已取消';summary='文档解析结果已保存，可先查看解析结果。';}
-    }
-  }
-  if(doc&&state==='partial'&&reply==='running_agent')summary+=' 正在根据可用内容生成回答。';
-  if(doc&&state==='partial'&&reply==='done')summary+=' 回答已生成，可返回原会话查看。';
-  if(doc&&state==='partial'&&['failed','interrupted'].includes(reply))summary+=' 回答尚未完成，可复用已有内容重新回答。';
+  else if(state==='done'){label=kind[2];summary=t.type==='archive'?'识别结果已保存，可返回原会话核对并继续出件。':'结果已保存，可打开下方文件查看。';}
   // 远端可能已经受理的任务必须说明核验/取回，不能让“失败”文案诱导用户重复提交。
   if(!busy&&state!=='done'&&t.phase==='submitting'){
     label='提交结果待核验';tone='unknown';summary='尚未确认服务平台是否受理，请先核对原会话或平台记录，避免重复提交。';
@@ -2217,7 +1950,6 @@ function taskPresentation(t){
   return {label,summary,tone,busy};
 }
 function taskActionLabel(t,a){
-  if(a.id==='continue_answer')return !t.body_available?'生成处理说明':(['failed','interrupted'].includes(t.reply_state)?'重新回答':'生成回答');
   if(a.id==='resume_remote')return '继续取回结果';
   return a.label;
 }
@@ -2253,10 +1985,10 @@ function renderTasks(){
     '<button class="ghost mini" data-task-filter="'+key+'" aria-pressed="'+String(taskCategory===key&&!taskFocusId)+'">'+label+'</button>').join('');
   $('#taskTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>taskFilter(b.dataset.taskFilter));
   const render=t=>{
-    const view=taskPresentation(t),actions=t.actions||[],primary=actions.find(a=>['continue_answer','resume_remote'].includes(a.id));
+    const view=taskPresentation(t),actions=t.actions||[],primary=actions.find(a=>a.id==='resume_remote');
     const visible=actions.filter(a=>a===primary||a.id==='cancel'),more=actions.filter(a=>!visible.includes(a));
     const actionButton=(a,main=false)=>'<button class="'+(main?'mini':'ghost mini')+'" data-task-action="'+esc(a.id)+'" title="'+esc(a.label)+'"'+(taskBusy.has(t.id)?' disabled':'')+'>'+esc(taskActionLabel(t,a))+'</button>';
-    const value=['archive','station-documents'].includes(t.type)&&t.processing_state==='running'?' value="'+Math.min(100,Math.max(0,t.progress||0))+'"':'';
+    const value=t.type==='archive'&&t.processing_state==='running'?' value="'+Math.min(100,Math.max(0,t.progress||0))+'"':'';
     return '<article class="task-card" data-task="'+esc(t.id)+'"><div class="task-title"><b>'+esc(t.title)+'</b><span class="task-badge" data-state="'+esc(view.tone)+'">'+esc(view.label)+'</span></div>'
       +'<div class="task-meta">'+esc(fmtWhen(t.created))+'</div>'
       +'<p class="task-description">'+esc(view.summary)+'</p>'
@@ -2264,7 +1996,7 @@ function renderTasks(){
       +(view.busy&&t.message?'<div class="task-meta">'+esc(t.message)+'</div>':'')
       +((t.artifacts||[]).length?'<div class="task-files">'+t.artifacts.map(f=>'<a target="_blank" rel="noopener" href="'+esc(f.url)+'">↗ '+esc(f.name)+'</a>').join('')+'</div>':'')
       +(visible.length||t.thread_id?'<div class="task-actions">'+visible.map(a=>actionButton(a,a===primary)).join('')
-        +(t.thread_id?'<button class="'+(!primary&&t.reply_state==='done'?'mini':'ghost mini')+'" data-task-thread="'+esc(t.thread_id)+'">'+(t.reply_state==='done'?'查看回答':'返回原会话')+'</button>':'')+'</div>':'')
+        +(t.thread_id?'<button class="ghost mini" data-task-thread="'+esc(t.thread_id)+'">返回原会话</button>':'')+'</div>':'')
       +'<details class="task-more"'+(expanded.has(t.id)?' open':'')+'><summary>更多操作与记录</summary><div class="task-actions">'+more.map(a=>actionButton(a)).join('')
       +(t.trace_id?'<button class="ghost mini" data-task-trace="'+esc(t.trace_id)+'">执行详情</button>':'')
       +(t.successor_id?'<button class="ghost mini" data-task-next="'+esc(t.successor_id)+'">查看后续任务 →</button>':'')
@@ -2295,8 +2027,7 @@ async function taskAction(id,action,button){
     const r=await fetch('/api/tasks/'+encodeURIComponent(id)+'/actions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,client_key:taskActionKeys.get(key)})});
     const d=await r.json();if(!r.ok)throw new Error(d.detail||'操作失败');
     if(epoch!==taskEpoch)return;
-    if(d.resume_turn_id){closeTasks();await openThread(d.thread_id);await send('',{resumeTurn:d.resume_turn_id,retryAgent:true,replyOnly:true});}
-    else if(d.task&&d.task.id!==id){taskFocusId=d.task.id;taskRows=[d.task];taskCursor='';renderTasks();}
+    if(d.task&&d.task.id!==id){taskFocusId=d.task.id;taskRows=[d.task];taskCursor='';renderTasks();}
     else await refreshTasks();
   }catch(e){if(epoch===taskEpoch){const node=button.closest('.task-card')?.querySelector('.task-feedback');if(node)node.textContent=String(e.message||'操作失败');}}
   finally{taskBusy.delete(id);button.disabled=false;if($('#taskPanel').style.display!=='none')taskTimer=setTimeout(()=>refreshTasks(),2500);}
@@ -2314,7 +2045,7 @@ document.addEventListener('keydown',event=>{
 // 执行详情从追踪表读取，聊天历史只保留关联 ID；旧消息没有采集记录。
 let traceViewId='',traceViewEpoch=0,traceRefreshTimer=null,traceFocus=null;
 const TRACE_STATES={running:'运行中',success:'成功',error:'失败',interrupted:'已中断',
-  waiting_parse:'等待附件或恢复回答',waiting_approval:'等待批准',cancelled:'已取消',skipped:'重复恢复，未执行'};
+  waiting_approval:'等待批准',cancelled:'已取消',skipped:'重复恢复，未执行'};
 function traceDuration(ms){return Number.isFinite(ms)?(ms<1000?Math.round(ms)+' ms':(ms/1000).toFixed(2)+' s'):'未采集';}
 function attachTraceButton(id,node){
   if(!node||!id)return;
@@ -2345,7 +2076,7 @@ async function refreshTrace(){
     const data=await r.json();if(!active())return;
     if(!r.ok)throw new Error(r.status===404?'未采集或记录已过保留期限':(data.detail||'读取失败'));
     renderTrace(data);
-    if(['running','waiting_parse'].includes(data.state)||(data.related||[]).some(t=>t.state==='running'))
+    if(data.state==='running'||(data.related||[]).some(t=>t.state==='running'))
       traceRefreshTimer=setTimeout(()=>{if(active())refreshTrace();},1500);
   }catch(e){if(active())$('#traceBody').textContent=String(e.message||'读取失败，请重试');}
 }
@@ -2384,7 +2115,7 @@ function renderTrace(data){
   const related=(data.related||[]).map(t=>'<button class="ghost mini trace-related" data-related="'+esc(t.id)+'">后台任务 · '+esc(t.attributes?.skill||'')+' · '+esc(TRACE_STATES[t.state]||t.state)+' →</button>').join('');
   body.innerHTML='<div class="trace-sub"><span class="trace-state" data-state="'+esc(data.state)+'">'+esc(TRACE_STATES[data.state]||data.state)+'</span> · '+esc(counts)+'</div>'
     +'<div class="trace-sub">'+esc(new Date(data.created*1000).toLocaleString())+'<br>Trace '+esc(data.id)+'</div>'
-    +'<div class="trace-metrics"><div class="trace-metric"><b>'+traceDuration(data.elapsed_ms)+'</b><span>总历时（含附件等待）</span></div>'
+    +'<div class="trace-metrics"><div class="trace-metric"><b>'+traceDuration(data.elapsed_ms)+'</b><span>总历时</span></div>'
     +'<div class="trace-metric"><b>'+traceDuration(data.active_ms)+'</b><span>请求处理累计</span></div>'
     +'<div class="trace-metric"><b>'+traceDuration(data.first_text_ms)+'</b><span>生成请求首段文本</span></div></div>'
     +(data.has_errors?'<p class="trace-note">期间发生过失败；请展开步骤查看重试或降级。</p>':'')
@@ -2443,7 +2174,7 @@ async function refreshProducts(){
   if(!me) return;
   try{
     const r=await fetch("/api/files"); if(!r.ok) return;
-    const d=await r.json(); renderProducts(d.groups||[]); renderDocumentProducts(d.documents||[],d.next_document_offset??null);
+    const d=await r.json(); renderProducts(d.groups||[]);
   }catch(e){ /* 抽屉打开失败静默，下次点开再试 */ }
 }
 function toggleProducts(show){
@@ -3073,7 +2804,7 @@ $("#mcpReset").onclick=()=>mcpReset();
 
 $("#btnNew").onclick=()=>newChat();
 $("#btnNewSide").onclick=()=>newChat();
-$("#btnSend").onclick=()=>sendWithDocuments();
+$("#btnSend").onclick=()=>sendCurrentInput();
 $("#inp").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#btnSend").click(); } });
 
 // 启动统一走 boot()（见文件顶部：/api/auth/me → 主对话 + 左侧历史），

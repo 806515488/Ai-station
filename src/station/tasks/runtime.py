@@ -17,6 +17,7 @@ from station.observability.recorder import BOOT_ID, instance_id
 from station.persistence.errors import LeaseLost
 from station.persistence.repositories import jobs as job_records
 from station.tasks.job import Job
+from station.core.contracts import ExecutionCancelled
 
 LEASE_SECONDS = 30
 _origin=contextvars.ContextVar('task_origin',default=None)
@@ -81,7 +82,7 @@ def current_origin():
     return _origin.get()
 
 
-class TaskCancelled(BaseException):
+class TaskCancelled(ExecutionCancelled):
     """协作式取消，穿过技能的普通异常兜底，但仍执行 finally 清理。"""
 
 

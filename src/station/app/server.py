@@ -1,6 +1,6 @@
 """station Web 应用装配与启动。
 
-接口按功能组放在 app/routes/；完整对话主流程在 chat/service.py。
+接口按功能组放在 app/routes/；完整会话编排在 conversation/service.py。
 本文件只创建应用、注册路由、挂载静态页面、管理生命周期与启动参数。
 启动：python -m station.app.server，或已安装环境中的 station-web。
 """
@@ -26,8 +26,6 @@ from station.app.routes import ROUTERS
 
 @asynccontextmanager
 async def _lifespan(_app):
-    from station.documents.service import recover
-    recover()
     try:
         yield
     finally:

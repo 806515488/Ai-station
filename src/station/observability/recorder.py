@@ -98,7 +98,7 @@ def current():
 
 
 def begin(user_id, thread_id, *, key='', kind='chat', origin='', attributes=None):
-    """同一附件轮次通过 key 找回 trace；一次恢复仍创建独立 request 步骤。"""
+    """相同关联键可复用 trace；每次请求仍有独立 request 步骤。"""
     if not user_id or os.environ.get('STATION_TRACE', '1') == '0':
         return None
     try:
@@ -153,7 +153,7 @@ def first_text():
     trace = current()
     if trace and not trace.first:
         trace.first = True
-        # 跨附件等待的总墙钟时间与本次请求等待时间分开保存。
+        # 总墙钟时间与本次请求首字时间分开保存。
         trace.record['first_text_ms'] = round((time.monotonic()-trace.started)*1000, 2)
         trace.save()
 

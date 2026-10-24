@@ -53,7 +53,7 @@ def _cfg_payload(user: dict, cfg: dict | None = None) -> dict:
             "presets": model_catalog.presets(),      # 「＋ 添加模型来源」的一键模板
             # 界面据此选引导文案：站长"不改也能用"，别人"先去填密钥"。
             "env_keys": is_owner,
-            # 离线假模型模式下整条配置链路都被绕过（chat.runtime.make_model 返回 FakeModel），
+            # 离线假模型模式下整条配置链路都被绕过（chat.assembly.make_model 返回 FakeModel），
             # 告诉前端一声，免得用户配了半天以为没生效。
             "fake": os.environ.get("STATION_FAKE", "0") == "1"}
 

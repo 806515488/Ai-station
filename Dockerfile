@@ -12,15 +12,9 @@ FROM python:3.11-slim
 # PYTHONUNBUFFERED=1 → 日志实时刷出来（否则 docker logs 要等缓冲满才看得到）。
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    DO_NOT_TRACK=1 \
-    NLTK_DATA=/opt/station-nltk
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-
-# 附件的本地格式检测依赖 libmagic；在联网构建阶段装入镜像，运行时无需下载。
-RUN apt-get update && apt-get install -y --no-install-recommends libmagic1 \
- && rm -rf /var/lib/apt/lists/*
 
 # ★ README.md 必须一起拷：pyproject.toml 里 `readme = "README.md"`，
 #   setuptools 打包时要读它，缺了会直接构建失败。
@@ -38,13 +32,8 @@ ARG PIP_INDEX=""
 #   而仓库根是 config.py 用 __file__ 往上找两层算出来的 —— 源码不在 /app/src，
 #   数据目录就会跑到别处去。
 #
-# ★ 附件解析要的 NLTK 分词资源（punkt_tab / averaged_perceptron_tagger_eng）**不在这里下**，
-#   由运行期挂载提供 —— 见 docker-compose.yml 的 `/srv/station/nltk` 那一段。理由两条：
-#   ① NLTK 默认下载源是 GitHub raw，这台构建机连不上（实测 Connection reset），国内镜像全 404；
-#   ② ★ **烤进镜像也没用**：运行期那条 bind mount 会**盖住**镜像里的同名目录，烤了等于白烤。
-#   所以镜像不为此自包含，NLTK_DATA 指向的就是那个挂载点 —— 那条 volume 是必需项。
 RUN if [ -n "$PIP_INDEX" ]; then pip config set global.index-url "$PIP_INDEX"; fi \
- && pip install --no-cache-dir -e '.[documents]'
+ && pip install --no-cache-dir -e '.[docx]'
 
 # data/ 是**唯一的持久状态**（SQLite、用户上传的照片、产物文件）。
 # 这里只是声明，真正挂载见 docker-compose.yml —— ★ 忘了挂 = 容器一删档案全没。

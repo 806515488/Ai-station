@@ -33,8 +33,6 @@ _TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("model_configs", ("user_id", "cfg", "updated")),
     ("mcp_servers", ("user_id", "cfg", "updated")),
     ("ref_links", ("token", "fid", "user_id", "expires", "created")),
-    ("station_documents", ("id", "user_id", "upload_key", "local_date", "sequence", "record", "created", "updated")),
-    ("station_attachment_turns", ("id", "user_id", "thread_id", "client_key", "state", "record", "created", "updated")),
     ("station_traces", ("id", "user_id", "thread_id", "correlation_key", "created", "updated", "record")),
     ("station_trace_spans", ("id", "trace_id", "created", "record")),
     ("station_task_control", ("job_id", "user_id", "instance_id", "boot_id", "token", "lease_until", "cancel_requested", "record", "updated")),

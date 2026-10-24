@@ -20,7 +20,7 @@ class Context:
     """一次运行的上下文。
 
     用 dataclass 声明，字段类型写在后边（类型注解），作用像文档，IDE 也能提示。
-    thread/skill_id 等谁创建谁填（一般是 chat.runtime 或 tasks.executor 创建）。
+    thread/skill_id 等谁创建谁填（一般是 chat.assembly 或 tasks.executor 创建）。
     """
     thread: Any = None                      # 属于哪次对话（core.session.Thread），可为空(job)
     skill_id: str = ""                      # 正在给哪个技能干活（技能的 id，如 weekly-report）
@@ -30,15 +30,12 @@ class Context:
     auto_approve: bool = False              # 是否自动放行危险工具（仅本机调试）
     user_id: str = ""                       # 归属用户（job 场景由 manager 从 job 带过来；工具落库归属用）
     job_id: str = ""                        # 后台任务号（job 场景由 manager 带上，落现场/审计用）
-    system: str = ""                        # 基础系统提示词（chat.runtime 从技能对象取来挂上）
+    system: str = ""                        # 基础系统提示词（chat.assembly 从技能对象取来挂上）
     events: list = field(default_factory=list)   # 事件收集桶（也可由 agent 生成器直接 yield）
-    document_inputs: dict[str, str] = field(default_factory=dict)  # 附件轮次 -> 已发布 parsed 资料
-    web_budget: Any = None                  # 本轮网页请求次数、网络等待及正文预算；不持久化
 
     task_checkpoint: Any = None
     task_cancel: Any = None
     task_recovery: dict = field(default_factory=dict)
-    reply_only: bool = False
 
     def checkpoint(self, **values):
         if self.task_checkpoint:self.task_checkpoint(**values)

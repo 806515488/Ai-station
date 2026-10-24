@@ -1,1 +1,1 @@
-"""对话应用层：从 service.ChatService 阅读完整流程，再按阶段进入各模块。"""
+"""共用回答能力：从 service.AnswerExecution 阅读批准、路由、装配和执行。"""

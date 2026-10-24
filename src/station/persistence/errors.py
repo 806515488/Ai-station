@@ -9,5 +9,9 @@ class TransactionAborted(RuntimeError):
     """内部事务失败被调用者捕获后，外层仍须回滚，不能悄悄提交部分结果。"""
 
 
+class ThreadConflict(RuntimeError):
+    """会话在读取后被其他请求修改；拒绝旧快照覆盖新状态，不自动重放工具。"""
+
+
 class LeaseLost(BaseException):
     """失去任务执行权；穿过普通 Exception 兜底，同时执行资源清理。"""

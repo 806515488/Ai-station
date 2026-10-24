@@ -51,26 +51,6 @@ def _interview_schema() -> tuple[str, ...]:
     )
 
 
-def _document_schema() -> tuple[str, ...]:
-    """附件元数据（两种数据库共用）；大正文、JSONL 和原件留在数据卷。"""
-    return (
-        "CREATE TABLE IF NOT EXISTS station_documents("
-        "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, upload_key TEXT NOT NULL, "
-        "local_date TEXT NOT NULL, sequence INTEGER NOT NULL, record TEXT NOT NULL, "
-        "created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL, "
-        "UNIQUE(user_id,upload_key), UNIQUE(user_id,local_date,sequence))",
-        "CREATE TABLE IF NOT EXISTS station_attachment_turns("
-        "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, thread_id TEXT NOT NULL, "
-        "client_key TEXT NOT NULL, state TEXT NOT NULL, record TEXT NOT NULL, "
-        "created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL, "
-        "UNIQUE(user_id,client_key))",
-        "CREATE INDEX IF NOT EXISTS idx_documents_user_date "
-        "ON station_documents(user_id,local_date,sequence)",
-        "CREATE INDEX IF NOT EXISTS idx_attachment_turns_thread "
-        "ON station_attachment_turns(user_id,thread_id,created)",
-    )
-
-
 def _trace_schema() -> tuple[str, ...]:
     """执行追踪只存有界元数据；正文仍属于会话/产物，不复制进追踪表。"""
     return (

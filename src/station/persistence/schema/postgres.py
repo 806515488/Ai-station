@@ -1,7 +1,7 @@
 """PostgreSQL 建表定义、只读结构检查与显式升级；保持既有表名/字段/索引。"""
 from __future__ import annotations
 from station.persistence.backends.postgres import PostgresConnection
-from .tables import _interview_schema, _document_schema, _trace_schema, _task_schema
+from .tables import _interview_schema, _trace_schema, _task_schema
 
 def _postgres_schema() -> tuple[str, ...]:
     """PostgreSQL 的初始 DDL（新库首次启动自动建表，幂等）。
@@ -49,7 +49,7 @@ def _postgres_schema() -> tuple[str, ...]:
         "CREATE INDEX IF NOT EXISTS idx_ck_project ON checkpoints(project, id)",
         "CREATE INDEX IF NOT EXISTS idx_ref_expires ON ref_links(expires)",
     )
-    return core + _interview_schema() + _document_schema() + _trace_schema() + _task_schema()
+    return core + _interview_schema() + _trace_schema() + _task_schema()
 
 
 _PG_SCHEMA_LOCK = 741_267_945
@@ -57,10 +57,9 @@ _PG_CORE_TABLES = {"users", "threads", "jobs", "archive_states", "corrections", 
                    "model_configs", "mcp_servers", "ref_links"}
 _PG_INTERVIEW_TABLES = {"interviews", "interview_recordings", "interview_questions",
                         "interview_question_spans", "interview_reviews", "interview_actions"}
-_PG_DOCUMENT_TABLES = {"station_documents", "station_attachment_turns"}
 _PG_TRACE_TABLES = {"station_traces", "station_trace_spans"}
 _PG_TASK_TABLES = {"station_task_control", "station_task_actions"}
-_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
+_PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
 
 def _postgres_schema_state(c: PostgresConnection) -> str:
     """探测现有 schema：只读，不让普通请求执行任何 DDL。"""
@@ -70,7 +69,7 @@ def _postgres_schema_state(c: PostgresConnection) -> str:
         "('users','threads','jobs','archive_states','corrections','checkpoints',"
         "'model_configs','mcp_servers','ref_links','interviews','interview_recordings',"
         "'interview_questions','interview_question_spans','interview_reviews',"
-        "'interview_actions','station_documents','station_attachment_turns',"
+        "'interview_actions',"
         "'station_traces','station_trace_spans','station_task_control','station_task_actions')").fetchall()
     tables = {row["table_name"] for row in rows}
     if not tables:
@@ -82,7 +81,7 @@ def _postgres_schema_state(c: PostgresConnection) -> str:
         "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name='users' AND column_name='seq') "
         "AS present").fetchone()["present"]
-    required = _PG_INTERVIEW_TABLES | _PG_DOCUMENT_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
+    required = _PG_INTERVIEW_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
     return "current" if has_seq and required.issubset(tables) else "upgrade-needed"
 
 
@@ -114,7 +113,7 @@ def upgrade_postgres_schema(c: PostgresConnection) -> str:
                 "UPDATE users SET seq=ordered.seq FROM ("
                 "SELECT id, ROW_NUMBER() OVER (ORDER BY created ASC, id ASC) AS seq FROM users"
                 ") AS ordered WHERE users.id=ordered.id AND users.seq=0")
-        for statement in _interview_schema() + _document_schema() + _trace_schema() + _task_schema():
+        for statement in _interview_schema() + _trace_schema() + _task_schema():
             c.execute(statement)
         return "upgraded"
 

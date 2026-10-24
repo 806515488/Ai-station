@@ -1,7 +1,6 @@
 """会话历史：本人会话列表、消息/卡片回放和工具显示名。"""
 from __future__ import annotations
 
-from station.persistence.repositories import attachments as attachment_records
 from station.persistence.repositories import threads as thread_records
 
 
@@ -64,6 +63,9 @@ def session_detail(tid: str, request: Request):
     t = Thread.load(tid)
     if t is None or getattr(t, "user_id", "") != u["id"]:
         raise HTTPException(404, "会话不存在")   # 抛 404 ≈ Java 里抛特定异常→框架转成 HTTP 状态码
+    if t.pending and not t.pending.get("id"):
+        # 一次性兼容旧数据：刷新后获得稳定 ID，旧按钮不会被自动绑定到新操作。
+        t = Thread.from_record(thread_records.ensure_pending_id(t.id, u["id"]))
     meta = t.meta or {}
     view = _replay_items(t.msgs, meta.get("cards") or [], u["id"])
     # ★ pending 要带上 **label**：刷新页面时前端要重画那张批准卡，而卡片上显示的是
@@ -75,9 +77,7 @@ def session_detail(tid: str, request: Request):
     return {"id": t.id, "skill_id": t.skill_id, "msgs": view,
             "pending": pend,
             "job_id": meta.get("job_id") or "",
-            "cards": meta.get("cards") or [],
-            "attachment_turns": [{"id": row["id"], "state": row["state"], "thread_id": t.id}
-                                 for row in attachment_records.attachment_turn_list(u["id"], t.id)]}
+            "cards": meta.get("cards") or []}
 
 
 def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
@@ -110,9 +110,6 @@ def _replay_items(msgs: list, cards: list, user_id: str = "") -> list:
                     "args": [c.get("arguments") or {} for c in calls]}})
         elif role in ("user", "assistant") and content:
             items.append({"role": role, "content": content, **({"trace_id": m["trace_id"]} if m.get("trace_id") else {})})
-            if role == "user" and m.get("attachment_turn_id"):
-                items.append({"role": "render", "content": "", "card": {
-                    "type": "attachments", "turn_id": m["attachment_turn_id"]}})
         # 卡片 idx 记的是“该工具结果出现的位置”，处理完这一条后再插入
         while ci < len(cards) and int(cards[ci].get("idx") or 0) <= pos:
             card = cards[ci].get("card")
