@@ -23,6 +23,9 @@ def create_app():
         task_acks_on_failure_or_timeout=False,
         worker_prefetch_multiplier=1, worker_detect_quorum_queues=True,
         control_queue_durable=True,
+        # gossip 也会声明事件接收队列；只配置控制队列还不够。
+        # RabbitMQ 4.3+ 拒绝非持久且非独占队列，显式设置以免 Worker 反复重连。
+        event_queue_durable=True, event_queue_exclusive=False,
         worker_cancel_long_running_tasks_on_connection_loss=True,
         broker_transport_options={"confirm_publish": True},
         broker_connection_retry_on_startup=True, broker_connection_timeout=5,
