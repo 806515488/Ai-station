@@ -443,7 +443,7 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
            任务 —— 旧成片会顶在新批准卡下面，看着像"重新生成却把以前的视频调出来"。
       卡片把这两条一起解决了：位置对（跟着工具调用走）、内容在（落库）。
     """
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     from station.skills.registry import get_registry
 
     p = (prompt or "").strip()
@@ -473,9 +473,9 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
 
     sec, ar = _norm_seconds(seconds), _norm_aspect(aspect_ratio)
     skill = get_registry().get(ctx.skill_id or "video")
-    if skill is None or skill.build_runner is None:
+    if skill is None or not (skill.run_step or skill.build_runner):
         return "视频生成引擎没装载，重启工作站再试。"
-    job = get_manager().submit(
+    job = task_service.submit(
         skill, {"prompt": p, "seconds": sec, "aspect_ratio": ar, "photos": photos},
         user_id=_owner(ctx))
     _remember_job(ctx, job.id)
@@ -495,11 +495,11 @@ def t_make(ctx, prompt: str, seconds: str = "5", aspect_ratio: str = "16:9"):
 
 def t_status(ctx, job_id: str = "") -> str:
     """查生成进度（不给编号就用这个会话最近一次的任务）。"""
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     jid = (job_id or "").strip() or _thread_job_id(ctx)
     if not jid:
         return "这个会话还没有生成过视频。"
-    snap = get_manager().get(jid)
+    snap = task_service.snapshot(jid)
     if snap is None:
         return f"任务 {jid} 不存在。"
     st = snap.get("status") or ""
@@ -513,13 +513,13 @@ def t_status(ctx, job_id: str = "") -> str:
 def t_show(ctx, file_id: str = "") -> dict:
     """把生成好的视频作为卡片发到对话里（对话里能直接播放 + 下载）。"""
     from station.files import store as fs
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
 
     fid = (file_id or "").strip()
     if not fid:
         # 没给文件号 → 取这个会话最近一次任务的最后一个产物
         jid = _thread_job_id(ctx)
-        snap = get_manager().get(jid) if jid else None
+        snap = task_service.snapshot(jid) if jid else None
         arts = (snap or {}).get("artifacts") or []
         fid = arts[-1] if arts else ""
     if not fid:
@@ -544,181 +544,14 @@ def t_show(ctx, file_id: str = "") -> dict:
 
 # ── 执行器入口 ───────────────────────────────────────────────────────
 
-def build_runner(ctx, prompt: str = "", seconds: str = "5",
-                 aspect_ratio: str = "16:9", photos: list | None = None):
-    """真跑一次生成：建任务 → 轮询 → 下载 → 落产物区，一路 yield 事件。
-
-    `photos`：人像照片的**文件 id 列表**（顺序即提示词里 `<Picture N>` 的编号）。
-    给了就把它们当**参考图**交给视频模型（`mode=reference`）—— 这样成片才"像本人"，
-    而不只是"照着文字描述画了一个人"。
-
-    新手视角：这是个**生成器函数** —— 每 `yield` 一次，宿主就收到一条进度事件并
-    落库，所以前端进度条能实时动。宿主只认三种事件（见 tasks/executor.py 的 Job.append）：
-      {"type":"progress","percent":N,"message":"…"}   改进度条
-      {"type":"artifact","id":"<文件id>"}              登记产物
-      {"type":"log","text":"…"}                        只留痕，不改进度条
-    ★ 事件里**只放文字和 id，绝不放视频字节** —— 每个事件都会整行重写一次数据库，
-      而前端每秒把整个 log 拉一遍。塞几 MB 进去会同时压垮两边（见 docs/pitfalls.md）。
-    ★★ **临时链接也绝不进事件、更不进 `job.args`**：前者经 `GET /api/jobs/{id}` 回给
-      前端并落进 `jobs.log` 一列，后者落 `jobs.args` 一列 —— 两个地方都是明文长期保存的。
-      所以签名这个动作**只在这里做**（make 只传 fid，URL 出了这个函数就没人知道）。
-    """
-    from station.models import config as modelcfg
-    from station.files import share
-    from station.files import store as fs
-
-    import agnes                     # 同目录的 code/agnes.py（技能装载时已在 sys.path 上）
-
-    sec, ar = _norm_seconds(seconds), _norm_aspect(aspect_ratio)
-    text = (prompt or "").strip()
-    if not text:
-        raise ValueError("没有画面描述，无法生成")
-
-    from station.tasks import runtime as task_runtime
-    recovery=getattr(ctx,"task_recovery",{}) or {}
-    if recovery.get("remote_id"):
-        entry=task_runtime.resolve_remote(_owner(ctx),recovery,"video")
-        yield from _collect(ctx,entry,recovery["remote_id"],text,sec,ar)
-        return
-    entries = modelcfg.resolve(_owner(ctx), "video")
-    if not entries:
-        raise ValueError("还没有配置「视频生成模型」（右上角 ⚙ 模型配置）")
-
-    # 给这一批人像签临时链接（对端要"公网可访问的直链"）。
-    # ★ 全程 try/finally：**任务一进终态就撤销**。官方要求链接活到任务完成，
-    #   所以不能在提交后就撤（那是自伤）；但也不能不撤（用户的照片不该长期挂在外面）。
-    #   `share.revoke` 自己吞异常 —— 善后失败绝不能把一个已经成功的任务判成失败。
-    tokens: list[str] = []
-    images: list[str] = []
-    for fid in (photos or [])[:MAX_PHOTOS]:
-        t = share.make_ref_link(fid, _owner(ctx))      # 没配对外地址会在这里抛人话
-        tokens.append(t)
-        images.append(share.ref_url(t))
-    try:
-        yield from _generate(ctx, entries, text, sec, ar, images)
-    finally:
-        # ★ 任务一到终态就撤销这张链接（成功、失败、超时都走这里）。
-        #   `share.revoke` 内部把异常吞掉 —— 善后失败绝不能反噬任务结果。
-        share.revoke(tokens)
+task_initial_phase = "submit"
 
 
-def _generate(ctx, entries, text: str, sec: str, ar: str, images: list):
-    """真正的生成链：建任务 → 轮询 → 下载 → 落产物区。
+def run_step(ctx, phase, **args):
+    """项目 Worker 的真实阶段入口；实现留在技能自己的任务模块。"""
+    from video_tasks import run_step as execute_step
+    return execute_step(ctx, phase, **args)
 
-    拆成独立函数是为了让 `build_runner` 那层能干净地 `try/finally` 善后
-    （撤销临时链接）—— 在一个几百行的生成器体里绕 try/finally 太容易漏。
-    """
-    from station.files import store as fs
-
-    import agnes                     # 同目录的 code/agnes.py（技能装载时已在 sys.path 上）
-
-    # ① 建任务。★ 只在**这一步**逐家试：建任务失败还没产生视频、没花掉额度，换一家是免费的；
-    #    一旦建成功，后面的轮询/下载就**只认这一家** —— 半途换家等于让两家各生成一次。
-    entry, last_err = None, None
-    for e in entries:
-        try:
-            from station.tasks.runtime import entry_snapshot
-            getattr(ctx,"checkpoint",lambda **kw:None)(phase="submitting",**entry_snapshot(e))
-            getattr(ctx,"check_cancel",lambda:None)()
-            task = agnes.create_task(e["base_url"], e["api_key"], e["model"],
-                                     text, sec, ar, images=images or None)
-            entry = e
-            break
-        except Exception as ex:
-            # 提交结果不明确时不换家创建第二条任务；只有明确拒绝才可尝试备用来源。
-            if not isinstance(ex,agnes.AgnesError) or ex.status not in (400,401,403,404,429,503):
-                raise
-            last_err = ex
-    if entry is None:
-        raise ValueError(f"创建视频任务失败：{last_err}")
-
-    vid = str(task.get("video_id") or task.get("id") or "").strip()
-    if not vid:
-        raise ValueError("Agnes 没返回任务编号（video_id），无法跟踪进度")
-    from station.tasks.runtime import entry_snapshot
-    getattr(ctx,"checkpoint",lambda **kw:None)(phase="remote_wait",remote_id=vid,remote_state="submitted",**entry_snapshot(entry))
-    # ★ 第一条事件必须是 progress：宿主收到它，界面上的进度条立刻从 0 动起来，
-    #   用户知道"点了有反应"。真正的等待在这之后（几分钟），先把这一步做实。
-    #   （archive 的识别链也是这么做的，同样的理由。）
-    yield {"type": "progress", "percent": 5,
-           "message": f"任务已提交（{sec} 秒 / {ar} / {SIZE}）"}
-    # 任务编号只留痕、不改进度条 —— 出问题时排查要用它去对端的控制台查
-    yield {"type": "log", "text": f"agnes video_id={vid} model={entry['model']}"}
-
-    yield from _collect(ctx,entry,vid,text,sec,ar)
-
-
-def _collect(ctx,entry,vid,text,sec,ar):
-    """恢复仅查询原远端任务并下载，绝不重新调用 create_task。"""
-    import agnes
-    from station.files import store as fs
-    if (getattr(ctx,"task_recovery",{}) or {}).get("remote_id")==vid:
-        for saved in fs.iter_files(owner=_owner(ctx)):
-            if saved.get("owner")==_owner(ctx) and saved.get("group_key")==f"video:{vid}" and fs.path(saved['id']):
-                yield {"type":"artifact","id":saved['id']}
-                yield {"type":"progress","percent":100,"message":"已取回本地保存的视频"}
-                return
-    # ② 轮询到出结果。★ 只认"完成/失败"两个终态，**其余一律当还在跑** ——
-    #    漏认一个状态名（比如对端哪天改叫 succeeded）会表现为"跑到最后超时"，
-    #    那比多等一轮难查得多。
-    deadline = time.time() + POLL_DEADLINE
-    pct = 5
-    status: dict = {}
-    while True:
-        try:
-            status = agnes.query_task(entry["base_url"], entry["api_key"],
-                                      entry["model"], vid)
-        except agnes.AgnesError as e:
-            # 被限流（免费档 RPM=1）不是失败：按对端建议退避后接着查。
-            if e.status != 429:
-                raise
-            yield {"type": "log", "text": f"429 限流，等待 {e.retry_after or POLL_SECONDS}s"}
-            time.sleep(agnes.sleep_for(e, POLL_SECONDS))
-            if time.time() > deadline:
-                raise ValueError(f"查询任务一直被限流，已等 {int(POLL_DEADLINE)} 秒") from e
-            continue
-
-        s = str(status.get("status") or "").strip().lower()
-        if s in ("completed", "succeeded", "done"):
-            break
-        if s in ("failed", "error", "cancelled"):
-            # 对端把原因放在 error 字段里（实测有这个键，正常时是 null）
-            getattr(ctx,"checkpoint",lambda **kw:None)(remote_state="failed",remote_terminal=True)
-            raise ValueError(
-                f"生成失败：{status.get('error') or status.get('message') or '对端未说明原因'}")
-        if time.time() > deadline:
-            raise ValueError(f"生成超时（已等 {int(POLL_DEADLINE)} 秒，任务 {vid} 仍在跑）")
-        # ★ 进度只许涨不许跌：宿主是拿事件里的 percent **直接覆盖**进度条的，
-        #   对端偶尔回一个更小的值会让进度条倒退，看着像出错了。
-        pct = max(pct, min(95, int(status.get("progress") or 0)))
-        yield {"type": "progress", "percent": pct, "message": f"生成中 {pct}%"}
-        time.sleep(POLL_SECONDS)
-
-    # ③ 下载并落进产物区。★ 四个来源元数据必须齐（owner/skill_id/group_key/group_label）：
-    #    少一个，右上角「我的产物」抽屉就会掉回"按文件名猜分组"，产物会七零八落。
-    url = agnes.result_url(status)
-    if not url:
-        # ★ 报错时把"响应里到底有哪些字段"带上 —— 09-14 就是因为这条只说了"没有地址"，
-        #   排查时还得再去对端手查一遍响应。字段名对不上是这类接口最常见的变化，
-        #   把实际的键列出来，下次一眼就能看出该改成读哪个。
-        raise ValueError("任务完成了，但响应里没有视频地址（顶层 url 与 metadata.url 都是空）。"
-                         f"响应里的字段有：{sorted(status)}")
-    getattr(ctx,"checkpoint",lambda **kw:None)(phase="download",remote_state="completed")
-    yield {"type": "progress", "percent": 96, "message": "正在下载视频…"}
-    data = agnes.download(url)
-
-    stamp = time.strftime("%m%d-%H%M%S")
-    fid = fs.save_bytes(
-        data, ".mp4", name=f"AI视频-{stamp}.mp4",
-        owner=_owner(ctx), skill_id=ctx.skill_id or "video",
-        group_key=f"video:{vid}",
-        group_label=f"AI 视频 · {text[:18]}")
-    getattr(ctx,"checkpoint",lambda **kw:None)(phase="completed",remote_state="completed")
-    yield {"type": "artifact", "id": fid}
-    yield {"type": "progress", "percent": 100, "message": "完成"}
-
-
-# ── 工具面 ───────────────────────────────────────────────────────────
 
 def tools() -> list[Tool]:
     """本技能的工具面。description 写给**模型**看，label 写给**人**看（两个受众别合并）。

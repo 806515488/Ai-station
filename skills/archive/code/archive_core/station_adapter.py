@@ -16,7 +16,7 @@
 注意：本模块顶层只 import 标准库，archive/engine/export 等全部函数内懒加载——
 让 station 注册表扫到它时零副作用，也避免宿主被 archive 依赖污染。
 
-新手视角：这里是“档案识别链”的后台执行器。宿主 JobManager 驱动它：拿输入
+新手视角：这里是“档案识别链”的后台执行器。项目 Celery Worker 驱动它：拿输入
 → storage 建项目/读记录 → 造模型 → 跑 LangGraph（graph.stream 逐节点吐进度）
 → 现场落 DB → 结束。“识别怎么干”全在 archive 包（engine/graph.py 5 节点）；
 “识别完之后怎么交互”全在对话工具层（skills/archive）。
@@ -127,7 +127,7 @@ def _iter_flow(records, llm_text, llm_vision, vision_channel="", sink=None,
                     yield {"type": "progress", "percent": _percent(node),
                            "message": _NODE_LABELS[node]}
     except Exception as e:                       # noqa
-        # 凭据问题要原样到 JobManager：它会显示“模型凭据无效”，而不是被包成
+        # 凭据问题要原样交给任务执行器：它会显示“模型凭据无效”，而不是被包成
         # 笼统的“识别链失败”。普通引擎异常仍保留上下文，方便定位节点。
         from archive_core.engine.providers import ModelCredentialError
         if isinstance(e, ModelCredentialError):
@@ -214,16 +214,16 @@ def _job_retry_notifier(ctx):
     返回 None 表示"没人听"（CLI/离线跑没有 job_id），engine 那边会安静跳过。
     """
     jid = str(getattr(ctx, "job_id", "") or "")
-    if not jid:
+    emit = getattr(ctx, "task_emit", None)
+    if not jid or not callable(emit):
         return None
-    from station.tasks.executor import get_manager        # 函数内 import：顶层只留标准库
 
     def note(ev: dict) -> None:
         # ★ 刻意**不传 percent**：runtime.append 的写法是
         #   `progress = ev.get("percent", 当前值)` —— 不带这个键就保持原进度、
         #   只刷新文案。传了会把进度条冲回 0，用户看着像倒退了。
         # ★ runtime.append 使用执行现场的锁，从识别链的并发 worker 线程里调是安全的。
-        get_manager().append(jid, {
+        emit({
                 "type": "progress",
                 "message": (f"模型连接失败，{float(ev.get('wait') or 0):g} 秒后重试"
                             f"（第 {ev.get('attempt')}/{ev.get('total')} 次）"),
@@ -241,19 +241,19 @@ def build_runner(ctx, photos_dir: str = "", project: str = "", person: str = "",
       1) **它有 yield，所以是生成器**：写 build_runner(...) 只是造出一个生成器对象，
          函数体**一行都不会跑**；真正的执行从宿主第一次 for 取值才开始（这就是为什么
          在 t_recognize 里看不到"识别"发生 —— 那边只负责把生成器交出去）。
-      2) 宿主这样驱动它（src/station/tasks/executor.py 的 _run）：
+      2) 宿主这样驱动它（src/station/tasks/worker.py 的 execute_job）：
              gen = skill.build_runner(ctx, **args)   # 造生成器（此时还没跑）
              for ev in gen:                          # 取一次 = 往前跑一段
-                 job.append(ev)                      # 把这一步写进任务记录 + 落库
-         所以"识别跑在哪个方法里"的准确答案是：**宿主的工作线程**在跑，本函数是它的引擎。
-      3) 每次 yield 出去的是一个**事件 dict**，宿主只认这三种（见 manager 模块 docstring）：
+                 runtime.append(execution, ev)                      # 把这一步写进任务记录 + 落库
+         所以"识别跑在哪个方法里"的准确答案是：**Celery Worker 的子进程**在跑，本函数是它的引擎。
+      3) 每次 yield 出去的是一个**事件 dict**，宿主只认这三种（见 tasks/runtime.py）：
              {"type":"progress", "percent":18, "message":"正在逐页读取内容"}
              {"type":"artifact", "id":…, "name":…}
              {"type":"log", …}
          迭代自然走完 = 任务成功（宿主置 done）；中途抛异常 = 任务失败（宿主置 failed
-         并把堆栈记进 job.log）。所以这里的 ValueError/RuntimeError 不是崩溃，是
+         并保存有界失败说明）。所以这里的 ValueError/RuntimeError 不是崩溃，是
          "把失败原因用中文说清楚，让人在界面上看到"。
-      4) **它不"返回识别结果"**：结果（materials/issues）在这一路被**落进 SQLite 现场**
+      4) **它不"返回识别结果"**：结果（materials/issues）在这一路被**落进数据库现场**
          （末尾 save_state），之后对话里的核对/改类/出件都读那份现场。这就是模块
          docstring 说的"跑完现场落 DB 即 done，没有确认门"（09-07 对话式改造）。
 

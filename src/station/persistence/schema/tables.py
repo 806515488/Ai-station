@@ -68,15 +68,9 @@ def _trace_schema() -> tuple[str, ...]:
 
 def _task_schema() -> tuple[str, ...]:
     return (
-        "CREATE TABLE IF NOT EXISTS station_task_control("
-        "job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, user_id TEXT NOT NULL, "
-        "instance_id TEXT NOT NULL DEFAULT '', boot_id TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '', "
-        "lease_until DOUBLE PRECISION NOT NULL DEFAULT 0, cancel_requested INTEGER NOT NULL DEFAULT 0, "
-        "record TEXT NOT NULL DEFAULT '{}', updated DOUBLE PRECISION NOT NULL)",
         "CREATE TABLE IF NOT EXISTS station_task_actions("
         "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, job_id TEXT NOT NULL, action TEXT NOT NULL, "
         "client_key TEXT NOT NULL, next_job_id TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, "
         "UNIQUE(user_id,client_key))",
-        "CREATE INDEX IF NOT EXISTS idx_task_control_user ON station_task_control(user_id,updated)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_created ON jobs(user_id,created DESC,id DESC)",
     )

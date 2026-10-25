@@ -6,7 +6,7 @@ from station.tasks.runtime import load_job
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from station.tasks.executor import get_manager
+from station.tasks import service as task_service
 from station.app.auth import require_user
 
 router = APIRouter(tags=["任务状态"])
@@ -54,7 +54,7 @@ def task_action(job_id: str, body: TaskActionIn, request: Request):
 def job_status(job_id: str, request: Request):
     """前端轮询：查任务当前状态/进度/产物（status、progress、artifacts…）。"""
     u = require_user(request)
-    snap = get_manager().get(job_id)
+    snap = task_service.snapshot(job_id)
     # 归属判断只走 DB（_job_owner）：manager 里没有归属信息，只能回库查 user_id。
     if snap is None or _job_owner(job_id) != u["id"]:
         raise HTTPException(404, "任务不存在")

@@ -66,13 +66,13 @@ skills/<id>/
 ### 运行时
 
 - **三层路由漏斗** —— L1 关键词秒判 → L2 小模型（带墙钟预算，超时降级）→ L3 通用 agent 兜底。只有命中的技能才加载工具面。
-- **任务中心与恢复** —— 集中查看排队、运行、中断、失败和已有结果；处理/回答分开，支持仅继续回答、文档新版本、复用缓存识别和原视频/转写任务取回。执行租约、检查点和动作防重保留历史结果；已有 PostgreSQL 需先停所有实例并显式升级。
+- **任务中心与恢复** —— 集中查看待投递、排队、运行、失败及产物；支持取消、补投、复用识别缓存和取回原视频/转写结果。消息与业务状态独立保存，远端提交结果不明时转人工核验；已有 PostgreSQL 需停旧实例并显式升级。
 - **对话执行追踪** —— 消息内查看执行时间线，关联路由、模型尝试、降级重试、工具和后台任务；刷新后可回看，只保存有界元数据。已有 PostgreSQL 部署需先停站运行 `station-upgrade-postgres`，再启动新代码。
 - **按模型配置能力** —— 「来源与模型」统一保存地址和 Key，一个来源可添加多个模型；「功能分配」按对话、意图、识图、语音、视频选择具体模型及主备顺序。参数按能力显示，逐模型测试，连接设置默认折叠。
 - **可选 Jev 意图识别** —— 在模型配置中添加 OpenCode Zen · Jev，填 Key 后加入意图识别顺序。使用 `jev-1.13-free` 和专用 `/systemone` 接口，保留原模型作备用；免费模型限时提供，不自动切换付费版本。
 - **原生网页检索** —— 全局 `web.search` / `web.fetch` 直接调用官方 DeepSeek Search/Fetch，复用本人来源的 Key，支持连接复用、短期缓存和长文分页。模型配置中可开关、选择来源并测试搜索；旧 Bing 等 HTML 搜索 MCP 默认停用，其他 MCP 不受影响。
-- **异步任务** —— `queued → running → done | failed`，进度事件落盘、前端轮询、产物进文件区。崩了重启能找回。
-- **重活闸** —— 全站同一时刻只跑 N 件吃内存的任务（默认 1）。把 OOM 从「服务无告警消失」变成可控排队，且排队原因对用户可见。
+- **Celery 长任务** —— 工作站项目内注册真实 Worker，RabbitMQ 持久队列分发任务；指定 Web 定时投递和补投，PG 分别保存消息状态与工作状态，进度卡继续查询业务结果。视频/转写按提交、查询、取回分阶段执行，未知提交不自动重发。
+- **任务资源隔离** —— 识别和出件进入 heavy 队列，当前部署一个并发为 1 的重任务 Worker；远端查询、下载使用单独 Worker。进程内信号量不再被用作跨进程限流。
 - **产物区 + 预览** —— 生成的文件按产出分组，对话里可点开、可下载。
 
 ---
@@ -96,7 +96,7 @@ skills/<id>/
     │             └── MCP 工具（外部服务，不走路由）  │
     │                                               │
     │  批准闸    approve 类工具跨回合挂起 / 恢复      │
-    │  任务     长活交给 JobManager 后台跑            │
+    │  任务     长活交给 Celery Worker 后台跑            │
     │  渲染     返回值带 render → 卡片进对话流        │
     └───────────────────────┬───────────────────────┘
                             ▼
@@ -222,7 +222,7 @@ src/station/          宿主
 ├── chat/             共用回答 · 意图路由 · 模型/工具/上下文装配
 ├── models/           模型配置与目录 · 调用策略 · 协议适配 · 连接测试
 ├── skills/           技能注册表（扫目录装载）
-├── tasks/            任务数据 · 执行与租约 · 用例 · 状态展示
+├── tasks/            双状态 · 定时投递 · Celery Worker · 阶段恢复
 ├── persistence/      数据库连接、事务、结构管理和领域仓库
 ├── accounts.py       注册登录业务（SQL 在用户仓库）
 ├── tools/            全局工具（每个会话都注入）
@@ -262,6 +262,21 @@ skills/               技能开放目录
 ```bash
 docker compose up -d --build
 ```
+
+后台识别、出件、视频和转写需要 RabbitMQ、共享 PostgreSQL 及项目 Worker。配置私有 `STATION_CELERY_BROKER_URL` 后，使用同一项目镜像启动 Web 与 Worker：
+
+```bash
+docker compose -f docker-compose.yml -f deploy/celery.compose.yaml build station
+# 既有库升级前先停止所有旧 Web / Worker，保留数据库备份。
+docker compose -f docker-compose.yml -f deploy/celery.compose.yaml run --rm --no-deps station station-upgrade-postgres
+docker compose -f docker-compose.yml -f deploy/celery.compose.yaml up -d --no-build
+```
+
+[Celery 部署覆盖文件](deploy/celery.compose.yaml) 默认连接外部 Docker 网络 `station-tasks_default`，可用 `STATION_TASK_NETWORK` 指定已有 MQ 网络。Web 与 Worker 使用同一个 PG 和 `/app/data`。仅一个 Web 进程启用投递，其他实例关闭 `STATION_TASK_PUBLISHER_ENABLED`。Worker 在 Linux/Docker 中运行。
+
+没有现成 MQ 时可参考 [RabbitMQ Compose](deploy/task-infra/compose.yaml)，该目录的私有 `.env` 需配置镜像引用、用户、强口令及 vhost。AMQP 默认仅本机映射；管理端口映射应按部署环境限制来源。该基础文件不会启动独立验收 Worker。
+
+任务状态 `message_status` 为 pending/confirmed/unknown/failed；`work_status` 为 pending/running/success/failed/cancelled/needs_review。发送确认不代表业务完成，重复投递由阶段状态与执行互斥处理，外部副作用不承诺恰好一次。
 
 要点（都是踩过的坑，写在文件注释里）：
 

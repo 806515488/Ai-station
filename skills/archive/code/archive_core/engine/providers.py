@@ -243,7 +243,7 @@ class _Chain:
         tried = " → ".join(str(e.get("id")) for e in self._entries)
         # 全链都是凭据问题时，不能让 node_mark 把它伪装成一张张“待核对”的空卡。
         # 用户会直接看到 Job.message，所以这里绝不能带上对端原始 JSON / request id；
-        # 原始异常仍作为 __cause__ 保留，JobManager 写进内部任务日志供排查。
+        # 原始异常仍作为 __cause__ 保留，供调用方继续区分凭据错误与普通调用失败。
         if failures and all(_is_credential_error(e) for e in failures):
             kind = "识图模型" if self._kind == "vision" else "模型"
             raise ModelCredentialError(

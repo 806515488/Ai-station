@@ -13,5 +13,5 @@ class ThreadConflict(RuntimeError):
     """会话在读取后被其他请求修改；拒绝旧快照覆盖新状态，不自动重放工具。"""
 
 
-class LeaseLost(BaseException):
-    """失去任务执行权；穿过普通 Exception 兜底，同时执行资源清理。"""
+class ExecutionLost(BaseException):
+    """执行消息或持锁数据库连接已失效，不允许旧执行现场继续写回。"""

@@ -1,0 +1,75 @@
+# 与根 docker-compose.yml 一起使用；Web 与 Worker 使用同一个项目镜像。
+# docker compose -f docker-compose.yml -f deploy/celery.compose.yaml up -d --build
+services:
+  station:
+    environment:
+      STATION_CELERY_BROKER_URL: "${STATION_CELERY_BROKER_URL:?请配置 RabbitMQ 连接串}"
+      STATION_TASK_PUBLISHER_ENABLED: "1"
+      STATION_TASK_NAMESPACE: "${STATION_TASK_NAMESPACE:-station}"
+    networks: [default, task-broker]
+    mem_limit: 512m
+
+  worker-heavy:
+    image: station-ai:latest
+    container_name: station-worker-heavy
+    hostname: station-worker-heavy
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      STATION_DATABASE_URL: "${STATION_DATABASE_URL:?Worker 需要共享 PostgreSQL}"
+      STATION_CELERY_BROKER_URL: "${STATION_CELERY_BROKER_URL:?请配置 RabbitMQ 连接串}"
+      STATION_TASK_NAMESPACE: "${STATION_TASK_NAMESPACE:-station}"
+      STATION_TASK_PUBLISHER_ENABLED: "0"
+      STATION_PUBLIC_BASE: "${STATION_PUBLIC_BASE:-}"
+    command: [python, -m, celery, -A, "station.tasks.celery_app:app", worker, -Q, "${STATION_TASK_NAMESPACE:-station}.heavy", --concurrency=1, --hostname=heavy@%h, --loglevel=INFO]
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes: [/srv/station/data:/app/data]
+    networks: [default, task-broker]
+    mem_limit: 1536m
+    cpus: 1.5
+    healthcheck:
+      test: [CMD, python, -c, "from station.tasks.celery_app import app; import socket; assert app.control.ping(destination=['heavy@'+socket.gethostname()],timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  worker-remote:
+    image: station-ai:latest
+    container_name: station-worker-remote
+    hostname: station-worker-remote
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      STATION_DATABASE_URL: "${STATION_DATABASE_URL:?Worker 需要共享 PostgreSQL}"
+      STATION_CELERY_BROKER_URL: "${STATION_CELERY_BROKER_URL:?请配置 RabbitMQ 连接串}"
+      STATION_TASK_NAMESPACE: "${STATION_TASK_NAMESPACE:-station}"
+      STATION_TASK_PUBLISHER_ENABLED: "0"
+      STATION_PUBLIC_BASE: "${STATION_PUBLIC_BASE:-}"
+    command: [python, -m, celery, -A, "station.tasks.celery_app:app", worker, -Q, "${STATION_TASK_NAMESPACE:-station}.remote", --concurrency=2, --hostname=remote@%h, --loglevel=INFO]
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes: [/srv/station/data:/app/data]
+    networks: [default, task-broker]
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: [CMD, python, -c, "from station.tasks.celery_app import app; import socket; assert app.control.ping(destination=['remote@'+socket.gethostname()],timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+networks:
+  task-broker:
+    external: true
+    name: "${STATION_TASK_NETWORK:-station-tasks_default}"

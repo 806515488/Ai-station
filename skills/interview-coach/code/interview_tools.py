@@ -90,14 +90,14 @@ def _check_file(ctx, fid: str) -> tuple[str, str]:
 
 def _check_job(ctx, job_id: str):
     """校验任务属于当前用户；返回 (snapshot, error)。"""
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     jid = (job_id or "").strip() or _thread_job_id(ctx)
     if not jid:
         return None, "这个会话还没有语音识别任务。"
     row = load_job(jid)
     if row is None or getattr(row, "user_id", "") != _owner(ctx):
         return None, "找不到这个语音识别任务。"
-    snap = get_manager().get(jid)
+    snap = task_service.snapshot(jid)
     if snap is None:
         return None, "找不到这个语音识别任务。"
     return snap, ""
@@ -208,7 +208,7 @@ def ask_audio(ctx) -> dict:
 def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
     """提交后台语音识别任务，立即返回一张 job 进度卡。"""
     from station import config
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     from station.skills.registry import get_registry
 
 
@@ -239,13 +239,13 @@ def transcribe(ctx, file_id: str = "", force: bool = False) -> dict:
         return config.public_base_hint()
 
     skill = get_registry().get(ctx.skill_id or "interview-coach")
-    if skill is None or skill.build_runner is None:
+    if skill is None or not (skill.run_step or skill.build_runner):
         return "语音识别执行器没有装载，重启工作站再试。"
     import uuid
     job_id=uuid.uuid4().hex[:16]
     interview_records.interview_recording_start(recording["id"], _owner(ctx), job_id)
     try:
-        job = get_manager().submit(skill, {
+        job = task_service.submit(skill, {
             "file_id": fid, "interview_id": interview["id"], "recording_id": recording["id"],
         }, user_id=_owner(ctx),job_id=job_id)
     except Exception as exc:
@@ -498,61 +498,13 @@ def set_action_status(ctx, action_id: str, status: str) -> str:
     return f"行动项「{action['title']}」已更新为 {action['status']}。"
 
 
-def build_runner(ctx, file_id: str = "", interview_id: str = "", recording_id: str = ""):
-    """后台执行 Qwen Filetrans，并把归一化转写结果写成 job artifact。"""
-    from station.files import share
-    from station.files import store as fs
+task_initial_phase = "submit"
 
 
-    fid = (file_id or "").strip()
-    if not fid:
-        raise ValueError("没有音频文件")
-    if not fs.path(fid) and not (getattr(ctx,'task_recovery',{}) or {}).get('remote_id'):
-        raise ValueError("音频文件不存在")
-    owner = _owner(ctx)
-    recording = interview_records.interview_recording_get(recording_id, owner)
-    if recording is None or recording.get("interview_id") != interview_id or recording.get("file_id") != fid:
-        raise ValueError("音频与面试档案归属不一致")
-    recovery=getattr(ctx,"task_recovery",{}) or {}
-    token = None if recovery.get("remote_id") else share.make_ref_link(fid, owner, ttl=max(share.link_ttl(), 14400.0))
-    try:
-        url = share.ref_url(token) if token else ""
-        import asr
-        result = None
-        for ev in asr.iter_transcribe(
-                ctx, url,
-                language_hints=["zh", "en"],
-                diarization_enabled=True,
-                poll_interval=5.0,
-                poll_deadline=7200.0):
-            if ev.get("type") == "result":
-                result = ev["result"]
-            else:
-                yield ev
-        if not isinstance(result, dict):
-            raise RuntimeError("语音识别没有返回结构化结果")
-        stamp = time.strftime("%m%d-%H%M%S")
-        tfid = fs.save_text(
-            json.dumps(result, ensure_ascii=False),
-            ".json", name=f"面试转写-{stamp}.json",
-            owner=owner, skill_id="interview-coach",
-            group_key=f"interview-transcript:{ctx.job_id or stamp}",
-            group_label="面试转写结果",
-            extra={"purpose": "interview_transcript"},
-        )
-        interview_records.interview_recording_finish(recording_id, owner, transcript_file_id=tfid,
-                                      asr_model=str(result.get("model") or ""),
-                                      expected_job_id=ctx.job_id or "")
-        yield {"type": "artifact", "id": tfid}
-        yield {"type": "log",
-               "text": f"transcript segments={len(result.get('segments') or [])}"}
-        yield {"type": "progress", "percent": 100, "message": "转写完成"}
-    except Exception as e:                    # noqa：任务失败也要让档案卡知道哪段失败了
-        interview_records.interview_recording_finish(recording_id, owner, error_message=f"{type(e).__name__}: {e}",
-                                      expected_job_id=ctx.job_id or "")
-        raise
-    finally:
-        if token:share.revoke([token])
+def run_step(ctx, phase, **args):
+    """项目 Worker 的真实阶段入口；实现留在技能自己的任务模块。"""
+    from interview_tasks import run_step as execute_step
+    return execute_step(ctx, phase, **args)
 
 
 def tools() -> list[Tool]:

@@ -1930,7 +1930,10 @@ function taskPresentation(t){
     'interview-coach':['音频','正在转写音频','转写已完成']}[t.type]||['任务','正在处理','已完成'];
   let label=TASK_STATES[state]||'状态待核验',summary='',tone=state;
   const busy=['queued','running','cancelling'].includes(state);
-  if(state==='queued'){label=kind[0]+'任务排队中';summary='任务已提交，等待开始处理。';}
+  if(state==='queued'){
+    label=t.message_status==='confirmed'?kind[0]+'任务排队中':'等待任务投递';
+    summary=t.message_status==='confirmed'?'消息已进入队列，等待 Worker 执行。':t.message_status==='unknown'?'消息投递尚未确认，系统将按间隔补投。':'任务已保存，等待发送到队列。';
+  }
   else if(state==='running'){label=kind[1];summary='任务正在执行，结果会保存在这里。';}
   else if(state==='cancelling'){label='正在停止';summary='停止请求已提交，已有结果会保留。';}
   else if(state==='failed'){label=({video:'视频生成失败',archive:'档案识别失败','interview-coach':'音频转写失败'})[t.type]||'任务失败';summary='请查看处理记录或返回原会话核对。';}
@@ -1939,11 +1942,18 @@ function taskPresentation(t){
   else if(state==='unknown'){label='执行状态待核验';summary='暂时无法确认任务是否仍在运行。已有结果保留，可返回原会话核对。';}
   else if(state==='cancelled'){label='已停止处理';summary='已停止本地处理或等待，已有结果会保留。';}
   else if(state==='done'){label=kind[2];summary=t.type==='archive'?'识别结果已保存，可返回原会话核对并继续出件。':'结果已保存，可打开下方文件查看。';}
+  if(t.type==='archive'&&t.phase==='export'){
+    if(state==='running'){label='正在导出档案';summary='后台正在生成归档文件。';}
+    else if(state==='done'){label='档案导出完成';summary='归档文件已保存，可在下方预览和下载。';}
+  }
+  if(state==='unknown'&&(t.actions||[]).some(a=>a.id==='retry_publish')){
+    label='消息投递需要处理';summary=t.message||'请核对 MQ 后重新投递当前步骤。';
+  }
   // 远端可能已经受理的任务必须说明核验/取回，不能让“失败”文案诱导用户重复提交。
   if(!busy&&state!=='done'&&t.phase==='submitting'){
     label='提交结果待核验';tone='unknown';summary='尚未确认服务平台是否受理，请先核对原会话或平台记录，避免重复提交。';
   }else if(!busy&&(t.actions||[]).some(a=>a.id==='resume_remote')){
-    label=t.phase==='download'?(t.type==='video'?'视频待取回':'结果待取回'):'本地等待已中断';tone='interrupted';
+    label=['download','collect'].includes(t.phase)?(t.type==='video'?'视频待取回':'结果待取回'):'本地等待已中断';tone='interrupted';
     summary='原任务编号已保留，可继续查询并取回结果，不会重新创建任务。';
   }
   if(t.successor_id)summary+=' 已创建后续任务，可在更多操作中查看。';
@@ -2020,7 +2030,8 @@ function renderTasks(){
 }
 async function taskAction(id,action,button){
   if(taskBusy.has(id))return;taskBusy.add(id);clearTimeout(taskTimer);
-  const key=id+'|'+action;
+  const current=taskRows.find(t=>t.id===id);
+  const key=id+'|'+action+'|'+(current?.action_version||'');
   if(!taskActionKeys.has(key))taskActionKeys.set(key,crypto.randomUUID());
   button.disabled=true;const epoch=taskEpoch;
   try{

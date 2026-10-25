@@ -7,8 +7,8 @@
   - pipeline 型：步骤写死、像工厂流水线，只汇报进度、最后交产物（适合
     “一定能跑完、只是慢”的任务，如批量档案、生视频）。由 jobs 后台跑。
 
-契约（与 tasks/executor.py 对齐）：build_runner 是【生成器函数】，宿主一个
-for 循环喂着它跑；它每 yield 一次事件，manager 就更新一次任务状态：
+契约（与 tasks/worker.py 对齐）：build_runner 是【生成器函数】，宿主一个
+for 循环喂着它跑；它每 yield 一次事件，Worker 就更新一次任务状态：
     {"type":"progress", "percent":0-100, "message": str}   # 报进度
     {"type":"artifact", "id": 文件id}                       # 产出一个文件
   迭代结束 = 任务成功。

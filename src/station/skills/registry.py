@@ -2,7 +2,7 @@
 
 entry 解析：import 模块后**看它暴露了什么就挂什么**（两个可以同时存在，互不排斥）：
   模块.tools()        → list[Tool]（name 为叶子，装载时补成 <ns>.<leaf>）
-  模块.build_runner() → 生成器工厂，见 station/tasks/executor 契约
+  模块.run_step()/build_runner() → 技能步骤生成器，见 station/tasks/worker
 manifest 里的 type 只管“这个技能对用户是什么形态”（agent=对话入口 / pipeline=纯后台），
 **不参与装载判断** —— 一个技能可以既有工具面、又带一个耗时执行器（如 skills/archive：
 工具面 + 识别执行器同一个技能，不再拆两个目录）。
@@ -177,6 +177,9 @@ class Registry:
             if callable(getattr(obj, "build_runner", None)):
                 # 问模块“长活怎么跑”(build_runner) → 存进 s.build_runner
                 s.build_runner = obj.build_runner
+            if callable(getattr(obj, "run_step", None)):
+                s.run_step = obj.run_step
+                s.task_initial_phase = getattr(obj, "task_initial_phase", "run")
             recovery = getattr(obj, "task_recovery", None)
             if callable(recovery):
                 s.task_recovery = recovery()

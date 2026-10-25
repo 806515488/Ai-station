@@ -2,6 +2,7 @@
 from __future__ import annotations
 from station.persistence.backends.postgres import PostgresConnection
 from .tables import _interview_schema, _trace_schema, _task_schema
+from .task_upgrade import JOB_COLUMNS, upgrade_jobs
 
 def _postgres_schema() -> tuple[str, ...]:
     """PostgreSQL 的初始 DDL（新库首次启动自动建表，幂等）。
@@ -21,7 +22,7 @@ def _postgres_schema() -> tuple[str, ...]:
         "updated DOUBLE PRECISION NOT NULL)",
         "CREATE TABLE IF NOT EXISTS jobs("
         "id TEXT PRIMARY KEY, user_id TEXT NOT NULL, skill_id TEXT NOT NULL, "
-        "args TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, "
+        "args TEXT NOT NULL, work_status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, "
         "message TEXT NOT NULL DEFAULT '', log TEXT NOT NULL, artifacts TEXT NOT NULL, "
         "result TEXT, created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL)",
         "CREATE TABLE IF NOT EXISTS archive_states("
@@ -49,7 +50,9 @@ def _postgres_schema() -> tuple[str, ...]:
         "CREATE INDEX IF NOT EXISTS idx_ck_project ON checkpoints(project, id)",
         "CREATE INDEX IF NOT EXISTS idx_ref_expires ON ref_links(expires)",
     )
-    return core + _interview_schema() + _trace_schema() + _task_schema()
+    job_columns = tuple("ALTER TABLE jobs ADD COLUMN " + name + " " + declaration for name, declaration in JOB_COLUMNS.items())
+    return core + job_columns + _interview_schema() + _trace_schema() + _task_schema() + (
+        "CREATE INDEX IF NOT EXISTS idx_jobs_publish ON jobs(message_status,next_publish_at)",)
 
 
 _PG_SCHEMA_LOCK = 741_267_945
@@ -58,7 +61,7 @@ _PG_CORE_TABLES = {"users", "threads", "jobs", "archive_states", "corrections", 
 _PG_INTERVIEW_TABLES = {"interviews", "interview_recordings", "interview_questions",
                         "interview_question_spans", "interview_reviews", "interview_actions"}
 _PG_TRACE_TABLES = {"station_traces", "station_trace_spans"}
-_PG_TASK_TABLES = {"station_task_control", "station_task_actions"}
+_PG_TASK_TABLES = {"station_task_actions"}
 _PG_TABLES = _PG_CORE_TABLES | _PG_INTERVIEW_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
 
 def _postgres_schema_state(c: PostgresConnection) -> str:
@@ -82,7 +85,8 @@ def _postgres_schema_state(c: PostgresConnection) -> str:
         "WHERE table_schema='public' AND table_name='users' AND column_name='seq') "
         "AS present").fetchone()["present"]
     required = _PG_INTERVIEW_TABLES | _PG_TRACE_TABLES | _PG_TASK_TABLES
-    return "current" if has_seq and required.issubset(tables) else "upgrade-needed"
+    job_columns = {r["column_name"] for r in c.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='jobs'").fetchall()}
+    return "current" if has_seq and required.issubset(tables) and {"work_status", *JOB_COLUMNS}.issubset(job_columns) else "upgrade-needed"
 
 
 def upgrade_postgres_schema(c: PostgresConnection) -> str:
@@ -113,6 +117,8 @@ def upgrade_postgres_schema(c: PostgresConnection) -> str:
                 "UPDATE users SET seq=ordered.seq FROM ("
                 "SELECT id, ROW_NUMBER() OVER (ORDER BY created ASC, id ASC) AS seq FROM users"
                 ") AS ordered WHERE users.id=ordered.id AND users.seq=0")
+        c.execute("LOCK TABLE jobs IN ACCESS EXCLUSIVE MODE NOWAIT")
+        upgrade_jobs(c, postgres=True)
         for statement in _interview_schema() + _trace_schema() + _task_schema():
             c.execute(statement)
         return "upgraded"

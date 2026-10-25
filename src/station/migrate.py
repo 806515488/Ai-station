@@ -19,14 +19,15 @@ import sqlite3
 from pathlib import Path
 
 from station import config
+from station.persistence.schema.task_upgrade import JOB_COLUMNS
 
 
 # 固定表名和列名，不从命令行接标识符：SQL 参数只能保护“值”，不能保护表名。
 _TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("users", ("id", "name", "pw_hash", "salt", "created", "seq")),
     ("threads", ("id", "user_id", "skill_id", "msgs", "meta", "created", "updated")),
-    ("jobs", ("id", "user_id", "skill_id", "args", "status", "progress", "message",
-              "log", "artifacts", "result", "created", "updated")),
+    ("jobs", ("id", "user_id", "skill_id", "args", "work_status", "progress", "message",
+              "log", "artifacts", "result", "created", "updated", *JOB_COLUMNS)),
     ("archive_states", ("project", "channel", "job_id", "user_id", "person", "state", "updated")),
     ("corrections", ("id", "project", "user_id", "kind", "payload", "ts")),
     ("checkpoints", ("id", "project", "channel", "user_id", "label", "state", "created")),
@@ -35,7 +36,6 @@ _TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ref_links", ("token", "fid", "user_id", "expires", "created")),
     ("station_traces", ("id", "user_id", "thread_id", "correlation_key", "created", "updated", "record")),
     ("station_trace_spans", ("id", "trace_id", "created", "record")),
-    ("station_task_control", ("job_id", "user_id", "instance_id", "boot_id", "token", "lease_until", "cancel_requested", "record", "updated")),
     ("station_task_actions", ("id", "user_id", "job_id", "action", "client_key", "next_job_id", "created")),
 )
 
@@ -64,6 +64,13 @@ def _select_exprs(source: sqlite3.Connection, name: str,
             exprs.append(column)
         elif name == "users" and column == "seq":
             exprs.append("rowid AS seq")
+        elif name == "jobs" and column == "work_status" and "status" in have:
+            exprs.append("CASE status WHEN 'done' THEN 'success' WHEN 'failed' THEN 'failed' WHEN 'cancelled' THEN 'cancelled' ELSE 'needs_review' END AS work_status")
+        elif name == "jobs" and column in JOB_COLUMNS:
+            if column == "meta" and source.execute("SELECT name FROM sqlite_master WHERE name='station_task_control'").fetchone():
+                exprs.append("COALESCE((SELECT record FROM station_task_control WHERE job_id=jobs.id),'{}') AS meta")
+            else:
+                exprs.append(JOB_COLUMNS[column].split(" DEFAULT ", 1)[1] + " AS " + column)
         else:
             raise RuntimeError(f"源库 {name} 缺列 {column}，无法迁移")
     return ",".join(exprs)

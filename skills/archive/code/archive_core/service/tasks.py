@@ -8,4 +8,5 @@ def validate(job, owner):
 
 
 def prepare(job, owner, next_id, metadata):
-    return {**job.args, "refresh": False}
+    metadata.setdefault("resource", "archive:" + job.args.get("project", ""))
+    return dict(job.args) if job.phase == "export" else {**job.args, "refresh": False}

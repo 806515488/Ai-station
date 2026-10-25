@@ -324,7 +324,7 @@ def node_mark(state):
             return r["seq"], card, False
         except providers.ModelCredentialError:
             # 401/403、缺 key 属于整条识图链的配置错误；不能伪装成单页读图失败。
-            # node_mark 外层的首张预检会立即把它交给 JobManager 标红。
+            # node_mark 外层的首张预检会立即把它交给任务执行器标记失败。
             raise
         except Exception as e:                    # noqa
             # 单页失败不拖垮整卷：给一个“建档失败”的空卡，进待核对

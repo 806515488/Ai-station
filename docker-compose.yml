@@ -74,7 +74,7 @@ services:
     # cgroup 硬上限（宿主机 3.5G，留出系统 + dockerd 的余量）。
     # 有它：超了死的是这个容器，`docker inspect` 一眼看得出是 OOM，服务重启即可。
     # 没它：内核在**宿主机**上随机挑一个受害者 —— 可能挑到 sshd，那你就连不上机器了。
-    # 配合 src/station/core/heavy.py 的重活闸（同时只跑一件吃内存的活）一起用。
+    # 接入 Celery 时用 deploy/celery.compose.yaml 覆盖本文件，按 Web/Worker 分配容量。
     mem_limit: 2600m
 
   # ── PostgreSQL ───────────────────────────────────────────────────

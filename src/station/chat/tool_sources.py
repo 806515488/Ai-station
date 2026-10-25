@@ -44,7 +44,7 @@ def jobs_note(thread) -> str:
     """本会话挂着的后台任务**现在的状态** —— 每轮现算一句，拼进系统提示。
 
     ★★ 为什么必须由宿主喂（09-16 用户实测报的 bug）：
-      后台任务跑在 JobManager 里，**只有宿主知道它跑到哪了**（此前只有前端在轮询
+      后台任务由 Celery Worker 执行，**只有宿主知道它跑到哪了**（此前只有前端在轮询
       `/api/jobs/{id}`）。而模型每轮能看见的只有历史消息里那句"开始生成了，
       预计要等几分钟" —— 于是**任务早就完成/失败了，它还在照旧话说"还在跑，别担心"**。
       用户的原话："视频生成完成了，但是后边的会话还不知道"。
@@ -64,8 +64,8 @@ def jobs_note(thread) -> str:
     if not jid:
         return ""
     try:
-        from station.tasks.executor import get_manager
-        snap = get_manager().get(jid)
+        from station.tasks import service as task_service
+        snap = task_service.snapshot(jid)
     except Exception:                      # noqa：任务那边坏了不许把对话带崩
         return ""
     if not snap:
@@ -80,5 +80,7 @@ def jobs_note(thread) -> str:
     if status == "failed":
         return (f"【后台任务现状】本会话最近一次后台任务（{who}）**失败了**："
                 f"{snap.get('message') or '没有更多信息'}。如实告诉用户，别再说它还在跑。")
+    if status in ("unknown", "interrupted", "cancelled", "cancelling"):
+        return f"【后台任务现状】本会话最近任务（{who}）需要核验或已停止：{snap.get('message') or status}。不要宣称它仍在正常执行，也不要擅自重新提交远端任务。"
     return (f"【后台任务现状】本会话最近一次后台任务（{who}）仍在进行中"
             f"（{snap.get('progress') or 0}%，{snap.get('message') or ''}）。")

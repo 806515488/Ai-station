@@ -26,9 +26,12 @@ from station.app.routes import ROUTERS
 
 @asynccontextmanager
 async def _lifespan(_app):
+    from station.tasks.publisher import start_publisher, stop_publisher
+    publisher = await start_publisher()
     try:
         yield
     finally:
+        await stop_publisher(publisher)
         from station.search import client, service
         import asyncio
         await asyncio.to_thread(client.close)

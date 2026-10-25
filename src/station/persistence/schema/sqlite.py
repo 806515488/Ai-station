@@ -2,6 +2,7 @@
 from __future__ import annotations
 import sqlite3
 from .tables import _trace_schema, _task_schema
+from .task_upgrade import upgrade_jobs
 
 def init_db(c: sqlite3.Connection) -> None:
     """建表（IF NOT EXISTS：已有库重复启动也不炸、不丢数据）。"""
@@ -31,7 +32,7 @@ def init_db(c: sqlite3.Connection) -> None:
         user_id  TEXT NOT NULL,
         skill_id TEXT NOT NULL,
         args     TEXT NOT NULL,   -- JSON
-        status   TEXT NOT NULL,
+        work_status TEXT NOT NULL,
         progress INTEGER NOT NULL DEFAULT 0,
         message  TEXT NOT NULL DEFAULT '',
         log      TEXT NOT NULL,   -- JSON：事件流水
@@ -186,6 +187,7 @@ def init_db(c: sqlite3.Connection) -> None:
     for statement in _trace_schema() + _task_schema():
         c.execute(statement)
     _migrate(c)
+    upgrade_jobs(c)
     c.commit()
 
 

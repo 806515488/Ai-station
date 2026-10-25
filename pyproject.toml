@@ -26,6 +26,7 @@ dependencies = [
     "pypdf>=3",
     "requests>=2.25",
     "httpx>=0.27",  # System One: async cancellation enforces the total request budget
+    "celery>=5.6.3,<5.7",  # 正式后台 Worker；RabbitMQ 4.3+ 使用持久控制队列配置
     # PostgreSQL 生产驱动。SQLite 仍由 Python 标准库支持，用于本地离线测试与
     # 一次性迁移的源库；运行时设置 STATION_DATABASE_URL 后才会实际连接 PG。
     "psycopg[binary]>=3.2,<4",

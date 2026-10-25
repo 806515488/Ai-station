@@ -41,13 +41,9 @@ class Skill:
     entry: str = ""         # 代码入口，如 station.demo_agent / weekly_report
     keys: list[str] = field(default_factory=list)   # 需要的 env key 白名单（权限）
     model: str = "text"     # 默认用 text 通道还是 vision
-    # ★ 这条技能的后台 job **会不会吃内存**（决定它要不要领 core/heavy.py 的"重活闸"）。
-    #   默认 True = 受闸保护：全站同时只跑一件，防小内存机器被内核 OOM 杀掉。
-    #   只有**纯网络等待型**长活才该写 false（如 skills/video：几分钟里几乎不吃本地内存，
-    #   峰值就是最后下载的那几 MB 视频；让它占着闸会把档案识别/导出堵死几分钟）。
-    #   ⚠️ **误用后果没有任何症状**：给一个真吃内存的技能标成 false，等于把 OOM 那道闸
-    #   亲手拆掉 —— 不报错、不崩日志，只在某个大卷上和别的活撞上时被内核杀掉。
-    #   拿不准就**别写这一行**（默认就是护着你的）。
+    # 后台任务进入哪个队列：True → heavy，False → remote。
+    # heavy Worker 默认并发 1，适合档案识别/出件；远端提交与查询可用 remote。
+    # 这是分队列配置；增加 Worker 会增加总并发，不是集群全局限流。
     heavy: bool = True
     icon: str = ""
     group: str = ""         # 分组名（可选）：前端把同组技能叠成一张卡（如"干部档案"=整理+核对）
@@ -65,6 +61,8 @@ class Skill:
     #   （skills/archive：工具面 + 耗时的识别执行器）。type 只决定它对用户的形态。
     tools: list = field(default_factory=list)      # 技能自带的工具（模块写了 tools() 才有）
     build_runner: Optional[Callable] = None        # 任务生成器入口（模块写了 build_runner() 才有）
+    run_step: Optional[Callable] = None            # Celery 的单阶段执行入口，返回事件生成器
+    task_initial_phase: str = "run"
     task_recovery: object = None                   # 已有任务恢复规则（运行时接入，不进 manifest）
 
     # to_info() 已删（09-11）：唯一用途是喂 /api/capabilities 渲染前端技能栏，

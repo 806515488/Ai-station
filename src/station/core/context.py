@@ -36,6 +36,7 @@ class Context:
     task_checkpoint: Any = None
     task_cancel: Any = None
     task_recovery: dict = field(default_factory=dict)
+    task_emit: Any = None
 
     def checkpoint(self, **values):
         if self.task_checkpoint:self.task_checkpoint(**values)

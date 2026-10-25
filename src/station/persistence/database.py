@@ -14,7 +14,7 @@ import time
 from station import config
 from station.persistence.backends import postgres
 from station.persistence.backends.sqlite import connect_sqlite
-from station.persistence.errors import TransactionAborted
+from station.persistence.errors import TransactionAborted, ExecutionLost
 
 
 class Database:
@@ -23,6 +23,7 @@ class Database:
         self._connection = None
         self.lock = threading.RLock()
         self._local = threading.local()
+        self._worker_connection = None
 
     @staticmethod
     def now() -> float:
@@ -49,6 +50,10 @@ class Database:
     def connection(self):
         """惰性建立连接；业务必须在 session/transaction 中使用返回的连接。"""
         with self.lock:
+            if self._worker_connection is not None:
+                if self._connection is not self._worker_connection or postgres.raw_is_closed(self._worker_connection.raw):
+                    raise ExecutionLost("Worker 持锁连接已失效，必须由新执行重新领取")
+                return self._worker_connection
             if (isinstance(self._connection, postgres.PostgresConnection)
                     and postgres.raw_is_closed(self._connection.raw)):
                 if self.in_transaction:
@@ -84,6 +89,8 @@ class Database:
     def replace_broken_connection(self, failed):
         """只在事务外替换本实例持有的坏连接；写事务不换连接或重放语句。"""
         with self.lock:
+            if self._worker_connection is not None:
+                raise ExecutionLost("Worker 数据库连接中断，禁止换连接后继续旧执行")
             if self._connection is not failed or self.in_transaction:
                 return None
             self._connection = None
@@ -92,6 +99,20 @@ class Database:
             except Exception:
                 pass
             return self.connection()
+
+    @contextmanager
+    def worker_connection(self, connection):
+        """prefork 子进程内一次只执行一项任务；固定持锁连接，断连不静默重连。"""
+        with self.lock:
+            previous = self._worker_connection
+            if previous is not None and previous is not connection:
+                raise RuntimeError("Worker 必须使用 prefork 执行池，不支持共享连接的并行线程池")
+            self._worker_connection = connection
+        try:
+            yield
+        finally:
+            with self.lock:
+                self._worker_connection = previous
 
     @contextmanager
     def session(self, *, write: bool = False):

@@ -254,7 +254,7 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
     ★ 换一家已经有结果时**不重跑**，直接切过去展示（用户要的是"看那家读的"，
       不是"再烧一遍"）—— 见下面 set_active 那段。
     """
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     from station.skills.registry import get_registry
     pj, person = _get_current(ctx)
     if not pj:
@@ -287,16 +287,16 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
     # 执行器是本技能自己的第二个入口（见本文件底部的 build_runner）——不再按字符串
     # 去够另一个技能：那样等于把跨技能依赖藏进注册表查找，谁也看不出它俩是一体的。
     skill = get_registry().get(ctx.skill_id or "archive")
-    if skill is None or skill.build_runner is None:
+    if skill is None or not (skill.run_step or skill.build_runner):
         return "识别引擎没装载，请联系管理员。"
     # 归属走 _owner(ctx)（thread 优先、回落 ctx.user_id）—— 别只从 thread 上摸：
     # 这条 job 的 user_id 决定"识别结果算谁的"，thread 缺席时（非对话路径）会变成
     # 无主任务。规矩见 docs/conventions.md「技能落库归属一律取 ctx.user_id」。
     # provider/refresh 随 args 透传给 build_runner（**args 就是它的形参）
-    job = get_manager().submit(
+    job = task_service.submit(
         skill, {"project": pj, "person": person,
                 "provider": provider, "refresh": bool(refresh)},
-        user_id=_owner(ctx))
+        user_id=_owner(ctx), task_metadata={"resource": "archive:" + pj})
     _set_current(ctx, pj, person, job.id)
     # 把“这个会话正在跟的识别任务”写进 Thread.meta —— 前端刷新/回放时才能知道
     # 该接哪条 job 的进度，而不是让后台任务“消失”。
@@ -311,7 +311,7 @@ def t_recognize(ctx, provider: str = "", refresh: bool = False) -> dict | str:
 
 def t_job_status(ctx, job_id: str = "") -> str:
     """工具：查识别 job 的状态/进度（agent 汇报进度用）。"""
-    from station.tasks.executor import get_manager
+    from station.tasks import service as task_service
     pj, person = _get_current(ctx)
     if not job_id:
         thread = getattr(ctx, "thread", None)
@@ -323,7 +323,7 @@ def t_job_status(ctx, job_id: str = "") -> str:
                     job_id = json.load(f).get("job_id") or ""
     if not job_id:
         return "还没有进行过识别。"
-    snap = get_manager().get(job_id)
+    snap = task_service.snapshot(job_id)
     if snap is None:
         return f"任务 {job_id} 不存在。"
     return (f"识别任务 {job_id}：{snap['status']} {snap['progress']}% —— "
@@ -751,28 +751,19 @@ def t_export(ctx) -> dict:
     job.result 原始态出过错（09-06 修复，见 station_adapter.export_archive）。
     返回 dict（text 给模型 + render 文件卡片给前端）——渲染契约见文件头。
     """
-    from archive_core.station_adapter import export_archive
-    from station.core import heavy
+    from station.tasks import service as task_service
+    from station.skills.registry import get_registry
     pj, person = _get_current(ctx)
     if not pj:
         return {"text": "还没有正在整理的档案卷。"}
-    # ★ 重活闸（见 station/core/heavy.py）：出件是全站最吃内存的一步（实测 120 页峰值
-    #   1.4G）。识别任务正在跑时再出一件，两件是**相加**，小机器直接被内核杀掉 ——
-    #   表现是"服务突然没了"，没有任何报错，最难查的那种故障。
-    #   这里只等一小会儿（CHAT_WAIT）：对话是同步请求，让用户浏览器干等几分钟不合适；
-    #   等不到就**把话说清楚**让他过会儿再来（与 t_recognize 用后台 job 绕开
-    #   "工具调用干等"是同一个取舍）。
-    with heavy.heavy_slot("档案出件", wait=heavy.CHAT_WAIT) as got:
-        if not got:
-            return {"text": (f"现在有别的重活在跑（{heavy.busy_with()}），"
-                             f"两件一起跑会把服务器内存撑爆。等它跑完再让我出件。")}
-        files = export_archive({"project": pj, "person": person,
-                                **_prod_meta(ctx, pj, person)})
-    if not files:
-        return {"text": "导出完成但没有产物文件（检查照片/识别结果）。"}
-    listing = t_show_files(ctx)
-    return {"text": (f"已出件：{'、'.join(n for _, n in files)}。" + listing["text"]),
-            "render": listing["render"]}
+    # 出件和识别共用 heavy 队列，资源限制由独立 Worker 的名额控制。
+    job = task_service.submit(get_registry().get("archive"),
+        {"project": pj, "person": person, "prod_meta": _prod_meta(ctx, pj, person)},
+        user_id=_owner(ctx), phase="export", task_metadata={"resource": "archive:" + pj})
+    if getattr(ctx, "thread", None) is not None:
+        ctx.thread.meta["job_id"] = job.id
+    return {"text": "出件任务已保存，完成后文件会显示在任务卡和我的产物中。",
+            "render": {"type": "job", "job_id": job.id}}
 
 
 def t_reconcile(ctx, path: str = "") -> dict:
@@ -1001,7 +992,7 @@ def tools() -> list[Tool]:
              run=t_checkpoints,
              args=[{"name": "ck_id", "type": "int", "desc": "要退回的检查点编号（不传=列出）", "required": False}]),
         # —— 出件 / 反哺 ——
-        Tool(name="export", label="导出 4 件套", description="按当前现场导出4件套（目录xlsx/原件PDF/待核对清单/判定报告）。危险操作：系统会先向用户请求批准。",
+        Tool(name="export", label="导出 4 件套", description="批准后提交后台出件任务，生成目录xlsx/原件PDF/待核对清单/判定报告。任务卡展示进度，完成后再查看文件；提交不代表已导出。",
              run=t_export, risk="approve", args=[],
              preview=_preview_export),      # 挂起前说清导什么、导哪份现场
         Tool(name="reconcile", label="对账改过的终版目录",
@@ -1037,8 +1028,24 @@ def tools() -> list[Tool]:
 
 # ══ 执行器入口 ═══════════════════════════════════════════════════════
 
+def run_step(ctx, phase, **args):
+    """Worker 运行真实档案任务；识别和导出走同一个重任务队列。"""
+    if phase == "run":
+        yield from build_runner(ctx, **args)
+    elif phase == "export":
+        from archive_core.station_adapter import export_archive
+        ctx.check_cancel()
+        files = export_archive({"project": args["project"], "person": args.get("person", ""),
+                                **args.get("prod_meta", {})})
+        if not files:
+            raise ValueError("导出没有产物，请检查照片与识别结果")
+        for fid, name in files:
+            yield {"type": "artifact", "id": fid, "name": name}
+    else:
+        raise ValueError("未知的档案任务阶段")
+
 def build_runner(ctx, **args):
-    """本技能的后台执行器入口（宿主 JobManager 用，**不是**给模型调的工具）。
+    """本技能的后台执行器入口（项目 Celery Worker 用，**不是**给模型调的工具）。
 
     新手视角：一个技能为什么有两个入口？
       - tools() 是**对话面**：模型能"点名"调用的那些动作（识别/改类/出件…）。
