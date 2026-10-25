@@ -269,12 +269,20 @@ docker compose up -d --build
 docker compose -f docker-compose.yml -f deploy/celery.compose.yaml build station
 # 既有库升级前先停止所有旧 Web / Worker，保留数据库备份。
 docker compose -f docker-compose.yml -f deploy/celery.compose.yaml run --rm --no-deps station station-upgrade-postgres
+# 首次启动分队列 Worker 前声明全部业务队列，供 Celery 绑定原生延迟路由。
+docker compose -f docker-compose.yml -f deploy/celery.compose.yaml run --rm --no-deps station python -c '
+from station.tasks.celery_app import app
+with app.connection_for_write() as connection:
+    with connection.channel() as channel:
+        for queue in (*app.amqp.queues.values(), app.station_dead_queue):
+            queue.bind(channel).declare()
+'
 docker compose -f docker-compose.yml -f deploy/celery.compose.yaml up -d --no-build
 ```
 
 [Celery 部署覆盖文件](deploy/celery.compose.yaml) 默认连接外部 Docker 网络 `station-tasks_default`，可用 `STATION_TASK_NETWORK` 指定已有 MQ 网络。Web 与 Worker 使用同一个 PG 和 `/app/data`。仅一个 Web 进程启用投递，其他实例关闭 `STATION_TASK_PUBLISHER_ENABLED`。Worker 在 Linux/Docker 中运行。
 
-没有现成 MQ 时可参考 [RabbitMQ Compose](deploy/task-infra/compose.yaml)，该目录的私有 `.env` 需配置镜像引用、用户、强口令及 vhost。AMQP 默认仅本机映射；管理端口映射应按部署环境限制来源。该基础文件不会启动独立验收 Worker。
+没有现成 MQ 时可参考 [RabbitMQ Compose](deploy/task-infra/compose.yaml)，该目录的私有 `.env` 需配置镜像引用、用户、强口令及 vhost。该文件将 AMQP 5672 和管理端口 15672 映射到宿主机，均保留密码认证。该基础文件不会启动独立验收 Worker。
 
 任务状态 `message_status` 为 pending/confirmed/unknown/failed；`work_status` 为 pending/running/success/failed/cancelled/needs_review。发送确认不代表业务完成，重复投递由阶段状态与执行互斥处理，外部副作用不承诺恰好一次。
 
