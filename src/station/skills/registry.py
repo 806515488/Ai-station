@@ -14,7 +14,7 @@ manifest 里的 type 只管“这个技能对用户是什么形态”（agent=�
   它做三件事：
     1) load_all / load    —— “加载”：扫描 skills/ 目录，读 manifest.json
     2) _load              —— “解析”：manifest 的 json → Skill 对象；再按 entry import 代码
-    3) ids/get/list/...   —— “查询”：给 server/UI 用（list 出有哪些技能、给 /api/capabilities）
+    3) get/list/...       —— “查询”：供对话装配、CLI 和工作台读取已加载能力
   加载失败的原则 = 【静默跳过】不崩：某个技能写坏了，宿主照常跑，只是不出现它。
 """
 from __future__ import annotations
@@ -161,7 +161,8 @@ class Registry:
                   system=_read_system(folder, m.get("system", "")),
                   # 可选：pipeline 参数表单声明（新键，or [] 归一 null → 空数组）
                   args=m.get("args") or [],
-                  args_one_of=m.get("args_one_of") or [])
+                  args_one_of=m.get("args_one_of") or [],
+                  workbench=m.get("workbench") or {})
         # —— 第二步：按 entry import 技能代码 ——
         try:
             obj = _import_entry(s.entry, folder)   # entry 可能是 station.* / archive.* / 本地 code

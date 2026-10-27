@@ -9,5 +9,27 @@
   "model": "text",
   "heavy": false,
   "icon": "🎤",
-  "system": "system.md"
+  "system": "system.md",
+  "workbench": {
+    "order": 20,
+    "icon": "interview",
+    "name": "面试录音复盘",
+    "category": "录音分析",
+    "description": "把面试录音转成文字，逐题梳理回答，找到可以改进的地方。",
+    "output": "转写文字稿、逐题复盘、改进建议",
+    "steps": [
+      "创建面试",
+      "上传录音",
+      "转成文字",
+      "逐题复盘"
+    ],
+    "input_kind": "conversation",
+    "action": "开始面试复盘",
+    "message": "我想复盘一场面试，请先帮我创建面试档案，并引导我上传面试录音。",
+    "sample_label": "示例录音",
+    "sample_notice": "原始面试录音不提供下载；案例仅展示脱敏技术问答与复盘。",
+    "case_id": "interview-first-review",
+    "pending": "先看真实录音的脱敏复盘案例，也可以上传自己的录音体验。",
+    "need": "准备一段 MP3、M4A 或 WAV 等格式的面试录音。助手会先帮你建立面试档案，再提供音频上传入口。"
+  }
 }

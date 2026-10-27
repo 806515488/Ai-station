@@ -7,5 +7,29 @@
   "entry": "weekly_report",
   "keys": [],
   "model": "text",
-  "icon": "📝"
+  "icon": "📝",
+  "workbench": {
+    "order": 30,
+    "icon": "weekly",
+    "name": "生成工作周报",
+    "category": "文档写作",
+    "description": "把零散的工作要点整理成周报，继续修改并导出 Word。",
+    "output": "结构化周报、可下载 Word 文档",
+    "steps": [
+      "填写要点",
+      "生成周报",
+      "对话修改",
+      "下载 Word"
+    ],
+    "input_kind": "text",
+    "action": "生成我的周报",
+    "message": "请根据以下工作要点帮我写一份工作周报，生成后我再核对修改：",
+    "sample_label": "示例要点",
+    "pending": "可先使用示例要点体验，也可以在完整案例中查看实际的三轮操作与最终文件。",
+    "label": "这周做了什么？",
+    "placeholder": "写下已完成的工作、遇到的问题，以及下周计划。\n零散的要点也可以。",
+    "sample": "本周完成：开发用户登录接口；修复任务列表的两处显示问题；完成接口文档整理。\n遇到的问题：第三方接口偶发超时，已补充重试和错误提示。\n下周计划：完善自动化测试，准备新版本发布。",
+    "case_id": "weekly-first-report"
+  },
+  "system": "system.md"
 }

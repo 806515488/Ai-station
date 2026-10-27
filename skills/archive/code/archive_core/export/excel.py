@@ -173,6 +173,14 @@ def export(materials: list[dict], person: str, out_dir: str,
         tr.append(r_)
     tr.sheet_state = "hidden"                   # 标记为隐藏
 
+    # 保留模板单元格与行高，只约束打印宽度；否则备注列可能被拆成独立页面。
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_area = f"A1:H{row - 1}"
+    ws.print_title_rows = "1:3"
     wb.save(xlsx)                               # 存盘成 .xlsx 文件
     return xlsx                                 # 把路径交给调用方（adapter 存进 station 文件区）
 

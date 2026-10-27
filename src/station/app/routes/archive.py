@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from station.skills.storage import repository as skill_repository
 
+import os
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse

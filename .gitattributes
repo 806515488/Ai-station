@@ -1,0 +1,8 @@
+# 案例文件按 SHA256 校验；跨 Windows/Linux 检出时保持字节稳定。
+skills/**/assets/cases/**/*.md text eol=lf
+skills/**/assets/cases/**/*.json text eol=lf
+skills/**/assets/cases/**/*.pdf binary
+skills/**/assets/cases/**/*.xlsx binary
+skills/**/assets/cases/**/*.docx binary
+skills/**/assets/cases/**/*.png binary
+skills/**/assets/cases/**/*.jpg binary

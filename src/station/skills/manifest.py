@@ -55,6 +55,8 @@ class Skill:
     # 注意：以下两个新字段必须带默认值 —— registry._load 用关键字构造 Skill，缺省会崩。
     args: list = field(default_factory=list)       # 可选：pipeline 参数表单描述（有序数组，见 validate_args）
     args_one_of: list = field(default_factory=list)  # 可选：[["photos_dir","project"],...] 每组"至少给一个"
+    # 可选：首页卡片和使用引导。具体结构由 workbench 用例校验，不参与技能路由。
+    workbench: dict = field(default_factory=dict)
     # —— 运行时装载（不进 manifest）——
     # ★ 这两个由 registry 按“entry 模块暴露了什么”来挂，**互不排斥**：技能可以只有
     #   tools（纯对话能力 / 叶子能力）、只有 build_runner（纯后台执行器）、或两者都有
@@ -66,8 +68,8 @@ class Skill:
     task_recovery: object = None                   # 已有任务恢复规则（运行时接入，不进 manifest）
 
     # to_info() 已删（09-11）：唯一用途是喂 /api/capabilities 渲染前端技能栏，
-    # 技能栏随"统一主对话"一起删了。icon/group/args 这几个 manifest 字段因此
-    # 不再有任何消费方 —— 解析仍保留（registry 会读），别再往界面描点子上想。
+    # 旧技能栏随“统一主对话”删除；icon/group/args 继续兼容旧声明。
+    # 新工作台使用 workbench 声明，由独立用例提供目录，不恢复旧 capabilities 接口。
 
 
 def load_manifest(folder: Path) -> dict:

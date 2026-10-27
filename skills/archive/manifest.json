@@ -8,5 +8,26 @@
   "keys": [],
   "model": "text",
   "icon": "📁",
-  "system": "system.md"
+  "system": "system.md",
+  "workbench": {
+    "order": 10,
+    "icon": "archive",
+    "name": "整理档案照片",
+    "category": "照片整理",
+    "description": "识别翻拍照片、整理材料分类，核对后导出目录和 PDF。",
+    "output": "Excel 目录、原件 PDF、核对报告",
+    "steps": [
+      "上传照片",
+      "识别分类",
+      "核对修改",
+      "导出文件"
+    ],
+    "input_kind": "conversation",
+    "action": "开始整理档案",
+    "message": "我要整理一卷干部人事档案，请先让我上传翻拍照片。",
+    "sample_label": "示例照片",
+    "pending": "已有6张虚构示例照片和完整执行案例，可下载后体验，也可使用自己的同卷照片。",
+    "need": "准备同一卷档案的翻拍照片，可选择文件夹或多张图片。助手会提供上传入口，并引导核对识别结果。使用示例图片时，请在上传卡填写虚构姓名“林远”。",
+    "case_id": "archive-first-volume"
+  }
 }

@@ -11,6 +11,7 @@ registry 会在 import 时把这个目录临时加进 sys.path（原理见 regis
 from __future__ import annotations
 
 import time
+import re
 
 from station.core.tool import Tool     # 工具“盒子”（见 tool.py）
 
@@ -57,8 +58,14 @@ def render_report(ctx, content: str = "", week: str = "") -> str:
     # 让内容读起来像要点列表：如果是一整句话，就包成一条“- xxx”
     if body and not body.startswith("-") and "\n" not in body:
         body = f"- {body}"
-    # 组周报 markdown（模板固定骨架）
-    md = "\n".join([
+    # 模型已经整理成完整章节时直接保存，避免再套一层模板而留下重复标题和占位文字。
+    if re.search(r"^##\s+(?:本周完成|数据\s*/\s*进展|遇到的问题|下周计划)", body, re.M):
+        lines = body.splitlines()
+        if lines and lines[0].startswith("# "):
+            body = "\n".join(lines[1:]).strip()
+        md = f"# 工作周报 · {week}\n\n{body}\n"
+    else:
+        md = "\n".join([
         f"# 工作周报 · {week}", "",
         "## 本周完成", body or "（本周没有新增内容）", "",
         "## 数据 / 进展", "（可补充量化数据）", "",
@@ -85,9 +92,30 @@ def export_docx(ctx, file_id: str = "", content: str = "") -> str:
     else:
         md = content or ""
     doc = Document()                   # 建 Word 文档对象
+    from docx.shared import Cm, Pt, RGBColor
+    from docx.oxml.ns import qn
+    for section in doc.sections:
+        section.page_width, section.page_height = Cm(21), Cm(29.7)
+        section.top_margin = section.bottom_margin = Cm(2)
+        section.left_margin = section.right_margin = Cm(2.2)
+    # 同时设置中西文字体；默认 Word 主题的蓝色标题不适合正式周报。
+    for name in ("Normal", "Title", "Heading 1", "Heading 2", "List Bullet"):
+        style = doc.styles[name]
+        style.font.name = "Microsoft YaHei"
+        style.font.color.rgb = RGBColor(0, 0, 0)
+        style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    doc.styles["Normal"].font.size = Pt(10.5)
+    doc.styles["Normal"].paragraph_format.line_spacing = 1.3
+    doc.styles["Normal"].paragraph_format.space_after = Pt(5)
+    doc.styles["Title"].font.size = Pt(20)
+    for border in doc.styles["Title"].element.xpath(".//w:pBdr"):
+        border.getparent().remove(border)
+    doc.styles["Heading 2"].font.size = Pt(13)
+    doc.core_properties.author = "station"
+    doc.core_properties.title = "工作周报"
     for ln in md.splitlines():         # 逐行解析 markdown → Word 段落/标题/列表
         if ln.startswith("# "):        # 一级标题 → Word Heading 1
-            doc.add_heading(ln[2:].strip(), level=1)
+            doc.add_paragraph(ln[2:].strip().replace(" · ", " "), style="Title")
         elif ln.startswith("## "):
             doc.add_heading(ln[3:].strip(), level=2)
         elif ln.strip() == "":         # 空行忽略

@@ -1,6 +1,6 @@
 """HTTP 路由目录：按功能分组，在 server.py 统一注册，始终先于静态页面。"""
 from . import (
-    auth, chat, models, mcp, uploads, sessions, traces, tasks, archive, files,
+    auth, chat, models, mcp, uploads, sessions, traces, tasks, archive, files, workbench,
 )
 
 ROUTERS = (
@@ -14,4 +14,5 @@ ROUTERS = (
     tasks.router,
     archive.router,
     files.router,
+    workbench.router,
 )

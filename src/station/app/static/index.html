@@ -22,15 +22,27 @@
   button:disabled{opacity:.5;cursor:not-allowed}
   #msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
   .m{max-width:78%;padding:8px 12px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
-  /* 工具调用那一行：小胶囊，不是"消息"——它说的是"系统正在做什么"。
-     显示技能声明的人话（⚙ 查看有哪些识图模型），原始名与参数放进 title / 右侧暗字。 */
+  /* 相邻工具调用收成一条可展开的过程记录，参数不挤在回答旁边。 */
   .m.tool{align-self:flex-start;background:none;border:0;padding:0 2px;
-          display:flex;align-items:center;gap:6px;max-width:88%;
-          font-size:12px;color:var(--dim)}
-  .m.tool .ti{flex:none;opacity:.7}
-  .m.tool>span:not(.ti):not(.ta){color:var(--fg);opacity:.9}
-  .m.tool .ta{flex:none;opacity:.6;font-family:ui-monospace,Consolas,monospace;
-              font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%}
+          width:fit-content;max-width:min(88%,760px);white-space:normal;font-size:12px;color:var(--dim)}
+  .tool-activity>summary{display:flex;align-items:center;gap:8px;padding:4px 6px;
+    border-radius:5px;cursor:pointer;list-style:none;min-width:0}
+  .tool-activity>summary::-webkit-details-marker{display:none}
+  .tool-activity>summary:hover{background:#ffffff05;color:var(--fg)}
+  .tool-activity>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+  .tool-activity .tool-name{min-width:0;overflow-wrap:anywhere}
+  .tool-count{font-size:11px;color:#7d8797;white-space:nowrap}
+  .tool-chevron{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;opacity:.7}
+  .tool-activity[open]>summary .tool-chevron{transform:rotate(90deg)}
+  .tool-entries{margin:5px 0 4px 6px;padding:0 0 0 12px;border-left:1px solid var(--line)}
+  .tool-entry{padding:8px 0;border-bottom:1px solid #ffffff06}
+  .tool-entry:last-child{border-bottom:0}
+  .tool-entry-label{font-size:12px;color:#b3bccb}
+  .tool-entry-name{font:11px/1.6 ui-monospace,Consolas,monospace;color:#7d8797;overflow-wrap:anywhere}
+  .tool-arguments{margin-top:4px}
+  .tool-arguments>summary{cursor:pointer;font-size:11px;color:#8d98a9;width:fit-content}
+  .tool-arguments pre{margin:6px 0 2px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;
+    background:var(--panel);font:11px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
   /* 经 Markdown 渲染的消息：关掉 pre-wrap（换行改由 <p>/<br> 管），并给块级元素排版 */
   .m.md{white-space:normal}
   .m.md p{margin:0 0 6px}
@@ -430,7 +442,22 @@
     #cfgPanel .cfgp-key input{flex-basis:calc(100% - 90px)}
     .cfgslot{flex-direction:column;gap:7px}.cfgslot-l{width:auto}
   }
-  .trace-trigger{display:block;margin-top:7px;font-size:11px;padding:2px 7px;color:inherit!important;opacity:.8}
+  /* 每轮回答的状态栏独立于消息气泡，跟在文字和工具卡片之后。 */
+  .turn-footer{align-self:flex-start;width:fit-content;max-width:100%;display:flex;align-items:center;
+    flex-wrap:wrap;gap:10px;margin:0 0 8px 4px;color:#8b95a5;font-size:11px}
+  .turn-summary{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+  .turn-indicator{width:6px;height:6px;flex:none;border-radius:50%;background:var(--dim)}
+  .turn-footer[data-state="success"] .turn-indicator{background:var(--ok)}
+  .turn-footer[data-state="error"] .turn-indicator{background:var(--err)}
+  .turn-footer[data-state="running"] .turn-indicator{background:var(--acc)}
+  .turn-footer[data-state="waiting_approval"] .turn-indicator{background:var(--warn)}
+  .turn-duration:not(:empty)::before{content:'·';margin-right:7px;opacity:.6}
+  .turn-footer .trace-trigger{display:inline-flex;align-items:center;gap:3px;flex:none;
+    background:transparent;border:0;border-left:1px solid var(--line);padding:2px 0 2px 10px;
+    color:#9aa5b6;font-size:11px;border-radius:0;line-height:1.6}
+  .turn-footer .trace-trigger:hover{color:var(--acc)}
+  .turn-footer .trace-trigger:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
+  .trace-trigger svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.5}
   #traceScrim{position:fixed;inset:0;background:rgba(0,0,0,.38);z-index:78}
   #tracePanel{position:fixed;inset:0 0 0 auto;width:min(640px,96vw);background:var(--panel);
     border-left:1px solid var(--line);z-index:79;display:flex;flex-direction:column;box-shadow:-15px 0 50px #0005}
@@ -488,6 +515,7 @@
   .task-empty{font-size:13px;color:var(--dim);padding:30px 8px;text-align:center}
   .task-foot{padding:9px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
 </style>
+<link rel="stylesheet" href="/home.css">
 </head>
 <body>
 <div id="taskScrim" style="display:none" onclick="closeTasks()"></div>
@@ -516,7 +544,9 @@
     </div>
   </div>
 </div>
-<aside><div class="side-h"><h1>⚡ station</h1></div>
+<div id="sideScrim" hidden></div>
+<aside id="sidebar" aria-label="工作台与会话导航"><div class="side-h"><span class="station-mark" aria-hidden="true">s</span><div class="station-brand"><h1>station</h1><small>云端 AI 工作站</small></div></div>
+  <button class="home-nav" id="btnHome"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>工作台</button>
   <button class="ghost" id="btnNewSide">＋ 新对话</button>
   <h2>历史</h2><div id="histList"></div>
   <div id="who" style="display:none"><b id="whoName"></b>
@@ -524,18 +554,22 @@
 </aside>
 <main>
   <div id="workspace">
-    <div class="bar"><b>对话</b>
+    <div class="bar"><button class="ghost header-action mobile-nav" id="mobileNav" aria-label="展开会话导航" aria-expanded="false" aria-controls="sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><b id="workspaceTitle">工作台</b><button class="ghost header-new" id="btnNew" title="开始一段新对话">＋ 新对话</button>
       <span style="flex:1"></span>
-      <button class="ghost mini" title="模型配置（这个站用哪家的 AI）" onclick="toggleConfig(true)">⚙</button>
-      <button class="ghost mini" title="MCP 服务（接入外部工具服务）" onclick="toggleMcp(true)">🔌</button>
-      <button class="ghost mini" onclick="openTasks()">我的任务</button>
-      <button class="ghost mini" title="我的产物" onclick="toggleProducts(true)">🗂</button>
-      <button class="ghost" id="btnNew">新对话</button>
-      <span style="width:1px;height:20px;background:var(--line)"></span>
-      <span class="hint" id="whoBar"></span>
-      <button class="ghost" id="btnLogout2">退出登录</button>
+      <button class="ghost header-action" onclick="openTasks()">我的任务</button>
+      <button class="ghost header-action" onclick="toggleProducts(true)">我的产物</button>
+      <div class="settings-control">
+        <button class="ghost header-action" id="settingsButton" aria-haspopup="menu" aria-expanded="false" aria-controls="settingsMenu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-1 1-3 3-1 2-3-2-2 1-3-3-2-3 1z"/><circle cx="12" cy="11" r="3"/></svg>设置</button>
+        <div class="settings-menu" id="settingsMenu" role="menu" aria-label="设置" hidden>
+          <button role="menuitem" data-settings="models">模型配置</button>
+          <button role="menuitem" data-settings="mcp">MCP 服务配置</button>
+          <hr role="separator"><button role="menuitem" id="btnLogout2">退出登录</button>
+        </div>
+      </div>
+      <span class="hint" id="whoBar" hidden></span>
     </div>
-    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+    <div class="conversation-area">
+      <section id="stationHome" class="station-home" aria-label="工作台与任务引导" hidden></section>
       <div id="msgs"></div>
       <div id="composer">
         <input id="inp" placeholder="直接说要做什么…">
@@ -623,6 +657,7 @@
   </div>
 </div>
 
+<script src="/home.js"></script>
 <script>
 const $=s=>document.querySelector(s);
 let threadId=null, me=null, currentApprovalId="";
@@ -715,6 +750,7 @@ function newChat(){
   currentApprovalId="";
   resetViewEphemera();            // 上一条还挂着等待态/待绘制文字，别让它漂到新会话里
   $("#msgs").innerHTML="";
+  StationHome.show();
   localStorage.removeItem("stLast");
   markHistory();
   setSend(true);                  // 旧会话的流在后台继续，但新会话可以立刻开始新一轮
@@ -729,7 +765,7 @@ async function refreshHistory(){
     //   用户看到的就是"聊完天左边历史没了"。历史列表宁可旧，也不能凭空消失。
     if(!r.ok) return;
     const d=await r.json();
-    const rows=(d.sessions||[]).map(h=>`<div class="hitem" data-id="${h.id}">
+    const rows=(d.sessions||[]).map(h=>`<div class="hitem" data-id="${h.id}" role="button" tabindex="0">
       <span class="t">${esc(histPreview(h))}</span>
       <span class="d">${esc(fmtWhen(h.updated))}</span></div>`).join("");
     $("#histList").innerHTML=rows||'<div class="hcap">还没有对话</div>';
@@ -742,17 +778,21 @@ async function openThread(id, sd){
   if(epoch!==viewEpoch || !data||data.msgs===undefined) return;
   resetViewEphemera();            // 切会话时同理：等待态/流式气泡都属于发起它的那一轮
   threadId=id; $("#msgs").innerHTML="";
+  StationHome.hide();
   currentApprovalId="";
+  let turnFooter=null;
   (data.msgs||[]).forEach(m=>{
+    // 下一条用户消息到来前，结束上一轮；卡片与多段回答共用一个入口。
+    if(m.role==="user"&&turnFooter){$("#msgs").appendChild(turnFooter);turnFooter=null;}
     if(m.role==="render"&&m.card){ renderCard(m.card); return; }
-    if(m.tool_call){ addMsg("tool",toolChip(m.tool_call)); return; }   // 工具调用行
+    if(m.tool_call){ addToolActivity(m.tool_call); return; }
     const cls=m.role==="user"?"u":(m.role==="tool"?"tool":"a");
     // 助手说的话走 Markdown 渲染（和流式那条路同一个口子）；用户/工具行保持原样转义
     // —— 用户自己的输入没必要渲染，少一个注入面。
     const el=addMsg(cls,"");
     if(cls==="a" && m.content) renderMsgText(el,m.content);
     else el.innerHTML=esc(m.content||"");
-    if(cls==="u" && m.trace_id)attachTraceButton(m.trace_id,el);
+    if(cls==="u" && m.trace_id)turnFooter=createTurnFooter(m.trace_id);
   });
   // 会话里若还挂着一个待批准的**危险操作**，把它重画出来 —— 否则用户看到的是
   // "agent 在等允许、屏幕上什么都没有"，只能盲敲"允许"。
@@ -760,6 +800,8 @@ async function openThread(id, sd){
     showAppr(data.pending.tool,data.pending.label,data.pending.arguments,
              data.pending.preview,data.pending.id,data.pending.state||"waiting");
   }
+  if(turnFooter)$("#msgs").appendChild(turnFooter);
+  loadTurnSummaries(id,epoch);
   localStorage.setItem("stLast",JSON.stringify({thread:id}));
   markHistory();
   watchThreadJob(data);       // 会话若还有识别任务在跑，接上进度
@@ -770,27 +812,44 @@ $("#histList").onclick=e=>{
   const it=e.target.closest(".hitem");
   if(it) openThread(it.dataset.id);
 };
+$("#histList").addEventListener('keydown',e=>{
+  if((e.key==='Enter'||e.key===' ')&&e.target.closest('.hitem')){e.preventDefault();e.target.closest('.hitem').click();}
+});
 
 // ── agent 面板（对话是唯一入口）──
 function addMsg(cls,html){ const d=document.createElement("div"); d.className="m "+cls; d.innerHTML=html; $("#msgs").appendChild(d); return d; }
 
-// 工具调用那一行：显示**技能声明的人话**（`Tool.label`），而不是 archive.xxx 这种名字
-// —— 用户看 `archive.list_vision_models` 完全不知道在干嘛。
-// 原始工具名 + 参数塞进 title（鼠标停上去才显示），参数另在右侧用暗色小字列出来。
-// ★ 实时（EV_TOOL 事件）与历史回放（/api/sessions 的 tool_call 字段）发的是**同一个
-//   形状**，都走这个函数 —— 别在别处再拼一份中文字符串（以前两边各写各的，改一处忘一处）。
-function toolChip(ev){
+// 实时与历史共用一份工具展示；只合并相邻的展示行，每次实际调用仍单独保留。
+function addToolActivity(ev){
   const names=(ev&&ev.names)||[], labels=(ev&&ev.labels)||[], args=(ev&&ev.args)||[];
-  if(!names.length) return "调用工具";
-  return names.map((n,i)=>{
-    const leaf=String(n||"").split(".").pop();
-    const label=String(labels[i]||"").trim()||leaf;      // 技能没写 label → 退回叶子名
-    const a=args[i]||{}, keys=Object.keys(a);
-    const detail=esc(`${label}\n${n}`+(keys.length?"\n"+JSON.stringify(a,null,2):""));
-    const brief=keys.slice(0,3).map(k=>`${k}=${a[k]}`).join(" ").slice(0,42);
-    return `<span class="ti" title="${detail}">⚙</span><span title="${detail}">${esc(label)}</span>`
-      + (brief?`<span class="ta" title="${detail}">${esc(brief)}</span>`:"");
-  }).join(`<span class="ti">·</span>`);
+  if(!names.length)return addMsg('tool','调用工具');
+  const messages=$('#msgs');
+  let node=messages.lastElementChild;
+  // 流式状态栏在最末尾；向前找到真实的上一段输出，不跨过文字、卡片或用户消息合并。
+  if(node?.classList.contains('turn-footer'))node=node.previousElementSibling;
+  if(!node?._toolCalls){
+    node=addMsg('tool','<details class="tool-activity"><summary><span class="tool-name"></span>'
+      +'<span class="tool-count"></span><svg class="tool-chevron" viewBox="0 0 16 16" aria-hidden="true">'
+      +'<path d="m6 4 4 4-4 4"/></svg></summary><div class="tool-entries"></div></details>');
+    node._toolCalls=[];
+  }
+  names.forEach((name,i)=>{
+    const label=String(labels[i]||'').trim()||String(name).split('.').pop();
+    const parameters=args[i]||{},hasArgs=Object.keys(parameters).length>0;
+    const detail=label+'\n'+name+(hasArgs?'\n'+JSON.stringify(parameters,null,2):'');
+    node._toolCalls.push({label,detail});
+    const entry=document.createElement('div');entry.className='tool-entry';entry.title=detail;
+    entry.innerHTML='<div class="tool-entry-label">'+esc(label)+'</div>'
+      +'<div class="tool-entry-name">'+esc(name)+'</div>'
+      +(hasArgs?'<details class="tool-arguments"><summary>调用参数</summary><pre>'
+        +esc(JSON.stringify(parameters,null,2))+'</pre></details>':'');
+    node.querySelector('.tool-entries').appendChild(entry);
+  });
+  const distinct=[...new Set(node._toolCalls.map(call=>call.label))];
+  node.querySelector('.tool-name').textContent=distinct.length<=2?distinct.join('、'):'工具调用';
+  node.querySelector('.tool-count').textContent=node._toolCalls.length+' 次调用';
+  node.querySelector('.tool-activity>summary').title=node._toolCalls.map(call=>call.detail).join('\n\n');
+  return node;
 }
 
 // ══ 消息里的 Markdown / HTML 渲染 ═══════════════════════════════════
@@ -967,6 +1026,7 @@ function setPendingRetry(ev){
 }
 
 async function send(text,opts={}){
+  StationHome.hide();
   // 这一次请求只归属于发起时正在看的那张会话。SSE 不支持从浏览器端安全地
   // “取消且让服务端停算”，因此切走时让它继续落库，但绝不允许污染新会话的 DOM。
   const epoch=viewEpoch, requestedThreadId=threadId;
@@ -974,9 +1034,14 @@ async function send(text,opts={}){
   const approvalId=opts.approvalId??currentApprovalId;
   let streamThreadId=requestedThreadId;
   const ownsView=()=>viewEpoch===epoch && threadId===streamThreadId;
-  let traceUser=null;
-  if(!opts.fromApprove){ traceUser=addMsg("u",esc(text)); }
-  else traceUser=[...document.querySelectorAll('#msgs .m.u')].at(-1)||null;
+  let turnFooter=null,turnTimer=null,turnDone=false;
+  const turnStarted=performance.now();
+  const paintTurnTime=()=>{
+    if(ownsView()&&turnFooter?.isConnected)
+      updateTurnFooter(turnFooter,turnFooter.dataset.state,performance.now()-turnStarted);
+    else if(turnTimer){clearInterval(turnTimer);turnTimer=null;}
+  };
+  if(!opts.fromApprove)addMsg("u",esc(text));
   breakBubble(); setSend(false);
   // 先"正在理解"——路由（判词）这一段最长，先给个交代，别让界面一片死寂
   showPending("正在理解你的意思…");
@@ -996,7 +1061,11 @@ async function send(text,opts={}){
         return;
       }
       else if(ev.type==="trace"){
-        attachTraceButton(ev.trace_id,traceUser);
+        if(!turnFooter&&ev.trace_id){
+          turnFooter=createTurnFooter(ev.trace_id,'running');
+          $("#msgs").appendChild(turnFooter);
+          paintTurnTime();turnTimer=setInterval(paintTurnTime,1000);
+        }
       }
       else if(ev.type==="stage"){
         currentApprovalId="";
@@ -1012,20 +1081,38 @@ async function send(text,opts={}){
         acc+=ev.text;
         if(!raf) raf=requestAnimationFrame(paintDelta);
       }
-      else if(ev.type==="tool"){ clearPending(); addMsg("tool",toolChip(ev)); breakBubble(); }
+      else if(ev.type==="tool"){ clearPending(); addToolActivity(ev); breakBubble(); }
       else if(ev.type==="render"&&ev.card){ clearPending(); renderCard(ev.card); breakBubble(); }   // 渲染即工具：卡片长在对话流里
       else if(ev.type==="approval_request"){
         clearPending(); showAppr(ev.tool,ev.label,ev.arguments,ev.preview,ev.approval_id); breakBubble();
+        if(turnFooter)updateTurnFooter(turnFooter,'waiting_approval');
       }
-      else if(ev.type==="error"){ clearPending(); addMsg("err",esc(ev.text||"出错")); breakBubble(); }
-      else if(ev.type==="done"){ refreshHistory(); syncThreadJob(streamThreadId); }
+      else if(ev.type==="error"){
+        clearPending(); addMsg("err",esc(ev.text||"出错")); breakBubble();
+        if(turnFooter)updateTurnFooter(turnFooter,'error');
+      }
+      else if(ev.type==="done"){
+        turnDone=true;
+        if(turnFooter&&turnFooter.dataset.state==='running')updateTurnFooter(turnFooter,'success');
+        refreshHistory(); syncThreadJob(streamThreadId);
+      }
+      // 卡片/工具/文字都在同一轮里，状态栏始终跟在这一轮输出后面。
+      if(ownsView()&&turnFooter?.isConnected)$("#msgs").appendChild(turnFooter);
     });
-  }catch(e){ if(ownsView()){ clearPending(); addMsg("err",esc("请求失败："+e)); } }
+  }catch(e){ if(ownsView()){
+    clearPending(); addMsg("err",esc("请求失败："+e));
+    if(turnFooter){updateTurnFooter(turnFooter,'interrupted');$("#msgs").appendChild(turnFooter);}
+  } }
   finally{
+    clearInterval(turnTimer);
     if(ownsView()){
       clearPending();                                                    // 兜底：任何出口都别留下等待态
       if(raf){ cancelAnimationFrame(raf); raf=0; } paintDelta();         // 把最后一帧画完
       setSend(true);
+      if(turnFooter){
+        if(!turnDone&&turnFooter.dataset.state==='running')updateTurnFooter(turnFooter,'interrupted');
+        paintTurnTime();loadTurnDetail(turnFooter);
+      }
     }
     refreshProducts();
   }
@@ -1908,7 +1995,9 @@ async function watchThreadJob(sd, showEnded){
     const d=document.createElement("div");
     d.className="prog"; d.dataset.job=jobId;
     d.innerHTML="";
-    $("#msgs").appendChild(d);
+    const tail=$("#msgs").lastElementChild;
+    if(tail?.classList.contains('turn-footer'))$("#msgs").insertBefore(d,tail);
+    else $("#msgs").appendChild(d);
     $("#msgs").scrollTop=$("#msgs").scrollHeight;
     setJobEl(jobId,snap,!going);        // 收尾态直接画终态
     if(going){
@@ -2058,12 +2147,53 @@ let traceViewId='',traceViewEpoch=0,traceRefreshTimer=null,traceFocus=null;
 const TRACE_STATES={running:'运行中',success:'成功',error:'失败',interrupted:'已中断',
   waiting_approval:'等待批准',cancelled:'已取消',skipped:'重复恢复，未执行'};
 function traceDuration(ms){return Number.isFinite(ms)?(ms<1000?Math.round(ms)+' ms':(ms/1000).toFixed(2)+' s'):'未采集';}
-function attachTraceButton(id,node){
-  if(!node||!id)return;
+const TURN_STATES={running:'正在处理',success:'已完成',error:'处理失败',interrupted:'已中断',
+  waiting_approval:'等待确认',cancelled:'已取消',skipped:'未重复执行',recorded:'本轮执行',missing:'记录未保留'};
+function createTurnFooter(id,state='recorded'){
+  const node=document.createElement('div');node.className='turn-footer';
   node.dataset.traceId=id;
-  let button=node.querySelector('.trace-trigger');
-  if(!button){button=document.createElement('button');button.className='ghost trace-trigger';node.appendChild(button);}
-  button.textContent='查看执行详情';button.onclick=()=>openTrace(id);
+  node.title='本轮回答的状态与用时；后台任务进度请查看任务卡。';
+  node.innerHTML='<div class="turn-summary"><span class="turn-indicator" aria-hidden="true"></span>'
+    +'<span class="turn-state" role="status"></span><span class="turn-duration"></span></div>'
+    +'<button class="trace-trigger" type="button" aria-label="查看本轮执行详情">执行详情'
+    +'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button>';
+  node.querySelector('button').onclick=()=>openTrace(id);
+  updateTurnFooter(node,state);return node;
+}
+function updateTurnFooter(node,state,ms){
+  node.dataset.state=state;
+  const label=node.querySelector('.turn-state'),text=TURN_STATES[state]||'本轮执行';
+  // 计时刷新不重复改写 live region，避免读屏器每秒播报同一句状态。
+  if(label.textContent!==text)label.textContent=text;
+  if(Number.isFinite(ms))node.querySelector('.turn-duration').textContent=
+    ms<1000?Math.round(ms)+' 毫秒':(ms/1000).toFixed(2)+' 秒';
+}
+async function loadTurnDetail(node){
+  const id=node.dataset.traceId;
+  try{
+    const r=await fetch('/api/traces/'+encodeURIComponent(id));
+    if(!node.isConnected)return;
+    if(r.status===404){updateTurnFooter(node,'missing');return;}
+    if(!r.ok)return;
+    const record=await r.json();if(!node.isConnected)return;
+    // done 可早于追踪 finally 落库；不让短暂的 running 覆盖本轮结束状态。
+    if(record.state!=='running'||node.dataset.state==='recorded')
+      updateTurnFooter(node,record.state,record.active_ms);
+  }catch(e){ /* 状态读取失败仍保留入口，不把未知状态伪装为成功。 */ }
+}
+async function loadTurnSummaries(tid,epoch){
+  try{
+    const r=await fetch('/api/sessions/'+encodeURIComponent(tid)+'/traces');
+    if(!r.ok)return;
+    const data=await r.json();if(viewEpoch!==epoch||threadId!==tid)return;
+    const records=new Map((data.traces||[]).map(record=>[record.id,record]));
+    document.querySelectorAll('#msgs .turn-footer').forEach(node=>{
+      const record=records.get(node.dataset.traceId);
+      if(!record)return; // 旧记录可能已清理或超出列表上限，不补造状态。
+      if(record.state==='running')loadTurnDetail(node);
+      else updateTurnFooter(node,record.state,record.active_ms);
+    });
+  }catch(e){ /* 历史仍可读，详情入口仍可打开。 */ }
 }
 function closeTrace(){
   traceViewEpoch++;traceViewId='';clearTimeout(traceRefreshTimer);
@@ -2087,6 +2217,9 @@ async function refreshTrace(){
     const data=await r.json();if(!active())return;
     if(!r.ok)throw new Error(r.status===404?'未采集或记录已过保留期限':(data.detail||'读取失败'));
     renderTrace(data);
+    document.querySelectorAll('#msgs .turn-footer').forEach(node=>{
+      if(node.dataset.traceId===id)updateTurnFooter(node,data.state,data.active_ms);
+    });
     if(data.state==='running'||(data.related||[]).some(t=>t.state==='running'))
       traceRefreshTimer=setTimeout(()=>{if(active())refreshTrace();},1500);
   }catch(e){if(active())$('#traceBody').textContent=String(e.message||'读取失败，请重试');}
@@ -2815,6 +2948,7 @@ $("#mcpReset").onclick=()=>mcpReset();
 
 $("#btnNew").onclick=()=>newChat();
 $("#btnNewSide").onclick=()=>newChat();
+$("#btnHome").onclick=()=>newChat();
 $("#btnSend").onclick=()=>sendCurrentInput();
 $("#inp").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#btnSend").click(); } });
 
