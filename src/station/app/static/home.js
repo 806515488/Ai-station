@@ -16,6 +16,11 @@
   const escape = value => String(value??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   // 后端只返回图标标识，不把 SVG/HTML 当作可以执行的界面内容。
   const icon = key => '<span class="home-icon"><svg viewBox="0 0 24 24" aria-hidden="true">'+(icons[key]||icons.task)+'</svg></span>';
+  // 已审阅案例的实际成品首页；只参与展示，后端资源与下载权限保持原有入口。
+  const documentPreviews = {
+    '从工作要点到 Word 周报': {filename:'weekly-report.docx', image:'/case-preview-weekly.png', label:'Word 成稿 · 首页预览'},
+    '六张档案照片的识别核对与出件': {filename:'archive-directory.xlsx', image:'/case-preview-directory.png', label:'Excel 目录 · 打印首页预览'}
+  };
   function cancelPreparation() {
     if (!preparation) return;
     const previous=preparation;preparation=null;previous.controller.abort();
@@ -25,6 +30,7 @@
   function setVisible(visible) {
     viewVersion++;cancelPreparation();caseView=null;
     root.hidden=!visible;messages.hidden=visible;
+    document.getElementById('composer').hidden=false;
     title.textContent=visible?'工作台':'对话';
     document.getElementById('btnHome').classList.toggle('is-chat',!visible);
     input.placeholder=visible?'也可以直接告诉我，你想完成什么…':'继续输入你的需求…';
@@ -57,8 +63,10 @@
         '<article class="home-card" data-task="'+escape(task.icon)+'"><div class="home-card-top">'+icon(task.icon)+'<span class="home-type">'+escape(task.category)+'</span></div>'
         +'<h3>'+escape(task.name)+'</h3><p class="home-description">'+escape(task.description)+'</p>'
         +'<div class="home-output"><span>你会得到</span><span>'+escape(task.output)+'</span></div>'
-        +'<div class="home-card-actions"><button class="home-start" data-home-task="'+escape(task.id)+'" aria-label="开始使用：'+escape(task.name)+'">开始使用 <span aria-hidden="true">↗</span></button>'
-        +'<button class="home-case" '+(task.case?.available?'data-home-case="'+escape(task.id)+'"':'disabled')+' title="'+escape(task.case?.reason)+'">'+escape(task.case?.label||'案例准备中')+'</button></div></article>'
+        +'<div class="home-card-actions">'+(task.case?.available
+          ?'<button class="home-case" data-home-case="'+escape(task.id)+'" title="'+escape(task.case.reason)+'">查看完整案例 <span aria-hidden="true">→</span></button>'
+            +'<button class="home-start" data-home-task="'+escape(task.id)+'" aria-label="开始使用：'+escape(task.name)+'">用自己的材料体验</button>'
+          :'<button class="home-start" data-home-task="'+escape(task.id)+'" aria-label="开始使用：'+escape(task.name)+'">开始使用 <span aria-hidden="true">→</span></button><span class="home-case-unavailable">案例准备中</span>')+'</div></article>'
       ).join('')+'</div>':'<p class="home-guide-note">暂时没有已加载的任务入口，你仍然可以直接对话。</p>')
       +'<div class="home-footer"><span>任务可跟踪 · 结果可下载 · 对话可回看</span>'
       +(quick?'<button class="home-text-button" data-home-task="'+escape(quick.id)+'">没有材料？先试试'+escape(quick.name)+' →</button>':'')+'</div></div>';
@@ -107,10 +115,28 @@
     (data.turns||[]).forEach(turn=>turn.messages.forEach(message=>{
       if(message.role==='tool')tools.set(message.content,message.label||message.content);
     }));
-    const links=(data.files||[]).filter(file=>file.role==='result').map(file=>
+    const outputs=(data.files||[]).filter(file=>file.role==='result');
+    const links=outputs.map(file=>
       '<a class="case-download" href="'+escape(file.url)+'" download="'+escape(file.filename)+'">'+escape(file.label)+' <span aria-hidden="true">↓</span></a>').join('');
+    const preview=documentPreviews[data.title];
+    const hasPreview=preview&&(data.files||[]).some(file=>file.filename===preview.filename);
+    const question=(data.report||'').match(/(?:^|\n)## 1\.[\s\S]*?(?=\n## 2\.|$)/)?.[0]||'';
+    const section = label => {
+      const start=question.indexOf(label);if(start<0)return '';
+      return question.slice(start+label.length).split(/\n\*\*|\n## /)[0].replace(/^[\s*：:]+/,'').replace(/^>\s?/gm,'').trim();
+    };
+    const original=section('**原回答短摘（ASR，未听校）**');
+    const feedback=section('**教练反馈**');
     let content='';
-    if(tab==='result')content='<section class="case-report" id="caseReport" aria-label="案例最终结果"></section>';
+    if(tab==='result'){
+      const firstResult=hasPreview?'<figure class="case-document-preview"><figcaption>'+escape(preview.label)+'</figcaption>'
+        +'<a href="'+escape(preview.image)+'" target="_blank" rel="noopener noreferrer" aria-label="放大查看'+escape(preview.label)+'"><img src="'+escape(preview.image)+'" alt="'+escape(preview.label)+'"></a><span>可滚动查看首页，点击放大；完整文件可下载。</span></figure>'
+        :original&&feedback?'<section class="case-answer-preview" aria-label="面试复盘节选"><p class="home-eyebrow">第 1 题 · 复盘节选</p><h2>从原回答到具体改进</h2>'
+          +'<div class="case-answer-original"><b>原回答 · 转写节选，未听校</b><p>'+escape(original)+'</p></div>'
+          +'<div class="case-answer-feedback"><b>教练建议 · 非原话</b><p>'+escape(feedback.slice(0,250))+(feedback.length>250?'…':'')+'</p></div><span>其余题目与完整建议见下方报告。</span></section>':'';
+      content=(firstResult?'<div class="case-result-overview">'+firstResult+'<aside class="case-delivery"><p class="home-eyebrow">本次生成的文件</p><h2>查看并带走结果</h2><p>'+escape(tasks.get(key)?.output||'完整结果与相关文件')+'</p><div class="case-delivery-files">'+links+'</div><button class="home-guide-secondary" data-case-tab="process">看看它是怎么完成的 →</button></aside></div>':'')
+        +'<details class="case-full-report"'+(firstResult?'':' open')+'><summary>阅读完整结果与报告</summary><section class="case-report" id="caseReport" aria-label="案例最终结果"></section></details>';
+    }
     else if(tab==='materials') {
       content='<section aria-label="示例照片"><p class="case-process-hint">这些照片是本案例实际使用的虚构材料。可点击查看大图，或下载图片包后重新上传体验。</p>'
         +'<div class="case-gallery">'+inputs.map(file=>'<a href="'+escape(file.preview_url)+'" target="_blank" rel="noopener noreferrer"><img src="'+escape(file.preview_url)+'" alt="'+escape(file.label)+'" loading="lazy"><span>'+escape(file.label)+'</span></a>').join('')+'</div></section>';
@@ -125,11 +151,13 @@
           }).join('')+'</div></details>').join('')+'</section>';
     }
     root.innerHTML='<div class="case-inner"><button class="home-back" data-home-back>← 返回工作台</button>'
-      +'<p class="home-eyebrow">演示案例 · '+escape(data.material_label||'虚构材料')+' · 实际执行记录</p><h1>'+escape(data.title)+'</h1><p class="case-summary">'+escape(data.summary)+'</p>'
-      +'<div class="case-actions">'+links+(data.materials_url?'<a class="case-download" href="'+escape(data.materials_url)+'" download>下载示例图片包 ↓</a>':'')
+      +'<p class="home-eyebrow">演示案例 · '+escape(data.material_label||'虚构材料')+'</p><h1>'+escape(data.title)+'</h1>'
+      +'<div class="case-actions">'+(tab==='result'&&(hasPreview||original&&feedback)?'':links)+(data.materials_url?'<a class="case-download" href="'+escape(data.materials_url)+'" download>下载示例图片包 ↓</a>':'')
       +'<button class="home-guide-secondary" data-case-replay="'+escape(key)+'">'+escape(data.replay_label||'用这份材料重新体验 →')+'</button></div>'
       +'<div class="case-tabs" role="tablist" aria-label="案例内容">'+tabs.map(id=>'<button id="caseTab'+id+'" role="tab" data-case-tab="'+id+'" aria-controls="caseContent" aria-selected="'+(tab===id)+'">'+labels[id]+'</button>').join('')+'</div>'
-      +'<div id="caseContent" role="tabpanel" aria-labelledby="caseTab'+tab+'">'+content+'</div></div>';
+      +'<div id="caseContent" role="tabpanel" aria-labelledby="caseTab'+tab+'">'+content+'</div><details class="case-background"><summary>案例背景与材料说明</summary><p>'+escape(data.summary)+'</p></details></div>';
+    document.getElementById('composer').hidden=true;
+    title.textContent='案例预览';
     if(tab==='result')window.renderMsgText(root.querySelector('#caseReport'),data.report,true);
     else if(tab==='process')root.querySelectorAll('[data-case-markdown]').forEach(node=>window.renderMsgText(node,node.textContent,true));
     root.scrollTop=0;
@@ -183,8 +211,8 @@
     if(event.target.dataset.draft){drafts[event.target.dataset.draft]=event.target.value;feedback('');}
   });
   root.addEventListener('keydown',event=>{
-    if(event.target.matches('[data-case-tab]')&&['ArrowLeft','ArrowRight'].includes(event.key)){
-      event.preventDefault();const tabs=[...root.querySelectorAll('[data-case-tab]')].map(node=>node.dataset.caseTab),index=tabs.indexOf(event.target.dataset.caseTab),next=tabs[(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];renderCase(next);root.querySelector('[data-case-tab="'+next+'"]').focus();
+    if(event.target.matches('[role="tab"][data-case-tab]')&&['ArrowLeft','ArrowRight'].includes(event.key)){
+      event.preventDefault();const tabs=[...root.querySelectorAll('[role="tab"][data-case-tab]')].map(node=>node.dataset.caseTab),index=tabs.indexOf(event.target.dataset.caseTab),next=tabs[(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];renderCase(next);root.querySelector('[role="tab"][data-case-tab="'+next+'"]').focus();
     }
   });
   window.StationHome={show,hide:()=>setVisible(false)};
