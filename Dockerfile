@@ -33,7 +33,8 @@ ARG PIP_INDEX=""
 #   数据目录就会跑到别处去。
 #
 RUN if [ -n "$PIP_INDEX" ]; then pip config set global.index-url "$PIP_INDEX"; fi \
- && pip install --no-cache-dir -e '.[docx]'
+ && pip install --no-cache-dir -e '.[docx]' \
+ && python -c "import io; from docx import Document; output = io.BytesIO(); Document().save(output); assert output.getvalue().startswith(b'PK')"
 
 # data/ 是**唯一的持久状态**（SQLite、用户上传的照片、产物文件）。
 # 这里只是声明，真正挂载见 docker-compose.yml —— ★ 忘了挂 = 容器一删档案全没。
